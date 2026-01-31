@@ -48,7 +48,8 @@ class MeanReciprocalRank(BaseMetric):
         _, sorted_indices = predictions.sort(dim=1, descending=True)
         
         # Find the rank of the target class for each sample using vectorized operations
-        # Find where each target appears in the sorted indices
+        # Note: targets are guaranteed to be valid class indices, so they will always
+        # appear in sorted_indices. argmax will find the first (and only) match.
         target_ranks = (sorted_indices == targets.unsqueeze(1)).long().argmax(dim=1)
         
         # Convert to 1-indexed ranks and compute reciprocals
