@@ -1,0 +1,28 @@
+# Pruning rules for efficient hyperparameter search
+compare:
+  - metric: top_1_accuracy
+    preference: higher
+  
+  - metric: model_parameters
+    preference: lower
+  
+  - metric: training_time_seconds
+    preference: lower
+
+abandon:
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: "<"
+        threshold: 0.20
+      - metric: epoch
+        operator: ">"
+        threshold: 10
+    logic: and
+    reason: "Poor performance after initial training"
+  
+  - conditions:
+      - metric: training_time_seconds
+        operator: ">"
+        threshold: 3600
+    logic: and
+    reason: "Training time exceeds 1 hour"

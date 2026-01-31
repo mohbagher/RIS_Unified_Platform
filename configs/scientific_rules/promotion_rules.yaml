@@ -1,0 +1,28 @@
+# Promotion rules for identifying promising configurations
+promote:
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: ">"
+        threshold: 0.90
+    logic: and
+    reason: "High accuracy - promising configuration"
+  
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: ">"
+        threshold: 0.85
+      - metric: model_parameters
+        operator: "<"
+        threshold: 100000
+    logic: and
+    reason: "Good accuracy with small model"
+  
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: ">"
+        threshold: 0.80
+      - metric: training_time_seconds
+        operator: "<"
+        threshold: 300
+    logic: and
+    reason: "Decent accuracy with fast training"

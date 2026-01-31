@@ -1,0 +1,11 @@
+# Default RIS system parameters
+N: 64
+N_x: 8
+N_y: 8
+K: 64
+M: 8
+frequency: 28.0e9  # 28 GHz
+element_spacing: 0.5  # Half-wavelength
+snr_db: 20.0
+phase_mode: continuous  # or 'discrete'
+phase_bits: 2  # for discrete mode
