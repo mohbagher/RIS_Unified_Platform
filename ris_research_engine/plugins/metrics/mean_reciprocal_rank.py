@@ -48,9 +48,6 @@ class MeanReciprocalRank(BaseMetric):
         _, sorted_indices = predictions.sort(dim=1, descending=True)
         
         # Find the rank of the target class for each sample using vectorized operations
-        # Create rank positions tensor
-        rank_positions = torch.arange(num_classes, device=predictions.device).unsqueeze(0).expand(batch_size, -1)
-        
         # Find where each target appears in the sorted indices
         target_ranks = (sorted_indices == targets.unsqueeze(1)).long().argmax(dim=1)
         
