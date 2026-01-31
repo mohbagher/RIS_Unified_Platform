@@ -21,9 +21,20 @@ class StrongestBeam(BaseBaseline):
         Args:
             similarity_metric: Metric to use for computing proximity.
                              Options: "cosine", "correlation", "euclidean"
+        
+        Raises:
+            ValueError: If similarity_metric is not one of the supported options.
         """
         super().__init__()
         self.description = "Score configs by proximity to strongest measured probe"
+        
+        valid_metrics = ["cosine", "correlation", "euclidean"]
+        if similarity_metric not in valid_metrics:
+            raise ValueError(
+                f"Unknown similarity metric: {similarity_metric}. "
+                f"Must be one of {valid_metrics}"
+            )
+        
         self.similarity_metric = similarity_metric
     
     def predict(
@@ -67,14 +78,11 @@ class StrongestBeam(BaseBaseline):
             else:
                 scores = np.ones(K)
         
-        elif self.similarity_metric == "euclidean":
+        else:  # euclidean
             # Inverse Euclidean distance
             distances = np.abs(config_indices - best_config_idx)
             # Use exponential decay for smoother scoring
             scores = np.exp(-distances / (K / 10.0))
-        
-        else:
-            raise ValueError(f"Unknown similarity metric: {self.similarity_metric}")
         
         # Ensure best configuration has highest score
         scores[best_config_idx] = 1.0

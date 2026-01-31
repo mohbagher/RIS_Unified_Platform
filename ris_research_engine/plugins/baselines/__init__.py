@@ -13,10 +13,13 @@ Available baselines:
 
 import importlib
 import inspect
+import logging
 from pathlib import Path
 from typing import Dict, Type
 
 from .base import BaseBaseline
+
+logger = logging.getLogger(__name__)
 
 # Import all baseline implementations
 from .random_selection import RandomSelection
@@ -52,7 +55,7 @@ def discover_baselines() -> Dict[str, Type[BaseBaseline]]:
                 if issubclass(obj, BaseBaseline) and obj is not BaseBaseline:
                     baselines[name] = obj
         except ImportError as e:
-            print(f"Warning: Could not import {module_name}: {e}")
+            logger.warning(f"Could not import {module_name}: {e}")
     
     return baselines
 
