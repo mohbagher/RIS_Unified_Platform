@@ -314,7 +314,9 @@ class HDF5DataSource(BaseDataSource):
                 measurement = power + noise
                 
                 # Store measurement with probe config
-                measurements[i, m*N:(m+1)*N] = probe_config
+                # Encode measurement with phase information
+                for n in range(N):
+                    measurements[i, m*N + n] = measurement * (1 + np.cos(probe_config[n])) / 2
         
         return measurements
     

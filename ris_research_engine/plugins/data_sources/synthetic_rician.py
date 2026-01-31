@@ -149,9 +149,11 @@ class SyntheticRicianDataSource(BaseDataSource):
                 # Add noise
                 noisy_power = power + noise_power * rng.randn()
                 
-                # Store probe configuration in input
-                # Input format: concatenate all probe configs
-                inputs[i, m*N:(m+1)*N] = probe_config
+                # Store probe measurements encoded with phase information
+                # For each probe, store N values: measurement modulated by phase config
+                # This preserves both the measurement AND which probe was used
+                for n in range(N):
+                    inputs[i, m*N + n] = noisy_power * (1 + np.cos(probe_config[n])) / 2
         
         return {
             'inputs': inputs,
