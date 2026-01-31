@@ -47,19 +47,15 @@ class MeanReciprocalRank(BaseMetric):
         # Get sorted indices (descending order by score)
         _, sorted_indices = predictions.sort(dim=1, descending=True)
         
-        # Find the rank of the target class for each sample
-        # Create a tensor that maps each class to its rank
-        ranks = torch.zeros_like(sorted_indices)
-        for i in range(batch_size):
-            ranks[i, sorted_indices[i]] = torch.arange(
-                num_classes, device=predictions.device
-            )
+        # Find the rank of the target class for each sample using vectorized operations
+        # Create rank positions tensor
+        rank_positions = torch.arange(num_classes, device=predictions.device).unsqueeze(0).expand(batch_size, -1)
         
-        # Get the rank of the target class (0-indexed)
-        target_ranks = ranks[torch.arange(batch_size), targets]
+        # Find where each target appears in the sorted indices
+        target_ranks = (sorted_indices == targets.unsqueeze(1)).long().argmax(dim=1)
         
         # Convert to 1-indexed ranks and compute reciprocals
-        reciprocal_ranks = 1.0 / (target_ranks.float() + 1.0)
+        reciprocal_ranks = 1.0 / (target_ranks + 1.0).float()
         
         # Compute mean
         mrr = reciprocal_ranks.mean().item()

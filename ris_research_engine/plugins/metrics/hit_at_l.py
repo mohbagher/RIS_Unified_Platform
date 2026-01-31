@@ -60,13 +60,12 @@ class HitAtL(BaseMetric):
             targets_expanded = targets.view(-1, 1).expand_as(top_L_indices)
             hit = (top_L_indices == targets_expanded).any(dim=1)
         else:
-            # Multiple targets per sample
-            hit = torch.zeros(batch_size, dtype=torch.bool, device=predictions.device)
-            for i in range(batch_size):
-                # Check if any target is in top-L predictions
-                sample_targets = targets[i]
-                sample_top_L = top_L_indices[i]
-                hit[i] = torch.isin(sample_targets, sample_top_L).any()
+            # Multiple targets per sample - vectorized approach
+            # Expand dimensions for broadcasting: (batch, 1, L) and (batch, num_targets, 1)
+            top_L_expanded = top_L_indices.unsqueeze(1)  # (batch, 1, L)
+            targets_expanded = targets.unsqueeze(2)  # (batch, num_targets, 1)
+            # Check if any target matches any top-L prediction
+            hit = (top_L_expanded == targets_expanded).any(dim=2).any(dim=1)
         
         # Compute hit rate
         hit_rate = hit.float().mean().item()
