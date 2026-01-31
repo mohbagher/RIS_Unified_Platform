@@ -146,7 +146,11 @@ class SyntheticRayleighDataSource(BaseDataSource):
                 
                 # Store probe measurements encoded with phase information
                 # For each probe, store N values: measurement modulated by phase config
-                # This preserves both the measurement AND which probe was used
+                # Encoding: noisy_power * (1 + cos(phase)) / 2
+                # - Preserves measurement magnitude (power)
+                # - Encodes phase information via cosine modulation  
+                # - Range: [0, noisy_power] for phase in [0, 2π]
+                # This allows the model to learn from both the measurement AND the probe used
                 for n in range(N):
                     inputs[i, m*N + n] = noisy_power * (1 + np.cos(probe_config[n])) / 2
         

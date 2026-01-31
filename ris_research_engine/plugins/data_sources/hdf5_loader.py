@@ -201,7 +201,7 @@ class HDF5DataSource(BaseDataSource):
             else:
                 # Compute from channels and probe matrix
                 probe_measurements = self._compute_probe_measurements(
-                    channel_matrices, probe_matrix, system_config
+                    channel_matrices, probe_matrix, system_config, seed
                 )
         
         # Split data
@@ -265,7 +265,8 @@ class HDF5DataSource(BaseDataSource):
     
     def _compute_probe_measurements(self, channel_matrices: np.ndarray,
                                    probe_matrix: np.ndarray,
-                                   system_config: SystemConfig) -> np.ndarray:
+                                   system_config: SystemConfig,
+                                   seed: int) -> np.ndarray:
         """
         Compute probe measurements from channel matrices.
         
@@ -273,6 +274,7 @@ class HDF5DataSource(BaseDataSource):
             channel_matrices: (N_samples, N) or (N_samples, 2, N) complex channels
             probe_matrix: (M, N) probe configurations
             system_config: System configuration
+            seed: Random seed for noise generation
             
         Returns:
             (N_samples, M*N) probe measurements
@@ -281,6 +283,9 @@ class HDF5DataSource(BaseDataSource):
         
         N_samples = len(channel_matrices)
         M, N = probe_matrix.shape
+        
+        # Create seeded RNG for reproducible noise
+        rng = np.random.RandomState(seed)
         
         # Ensure channels are complex
         if channel_matrices.dtype != np.complex64 and channel_matrices.dtype != np.complex128:
@@ -309,12 +314,15 @@ class HDF5DataSource(BaseDataSource):
                 
                 power = compute_received_power(h_tx_ris, h_ris_rx, probe_config)
                 
-                # Add noise
-                noise = noise_power * np.random.randn()
+                # Add noise using seeded RNG
+                noise = noise_power * rng.randn()
                 measurement = power + noise
                 
                 # Store measurement with probe config
-                # Encode measurement with phase information
+                # Encoding: measurement * (1 + cos(phase)) / 2
+                # - Preserves measurement magnitude (power)
+                # - Encodes phase information via cosine modulation
+                # - Range: [0, measurement] for phase in [0, 2π]
                 for n in range(N):
                     measurements[i, m*N + n] = measurement * (1 + np.cos(probe_config[n])) / 2
         
