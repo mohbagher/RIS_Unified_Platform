@@ -1,0 +1,36 @@
+# Early stopping rules for efficient search
+abandon:
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: "<"
+        threshold: 0.15
+    logic: and
+    reason: "Validation accuracy too low - worse than random baseline"
+  
+  - conditions:
+      - metric: train_loss
+        operator: ">"
+        threshold: 5.0
+      - metric: epoch
+        operator: ">"
+        threshold: 20
+    logic: and
+    reason: "Training loss not decreasing after 20 epochs"
+
+early_stop:
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: ">"
+        threshold: 0.95
+    logic: and
+    reason: "Near-perfect accuracy achieved"
+  
+  - conditions:
+      - metric: val_top_1_accuracy
+        operator: ">"
+        threshold: 0.90
+      - metric: epoch
+        operator: ">"
+        threshold: 50
+    logic: and
+    reason: "High accuracy and sufficient training"

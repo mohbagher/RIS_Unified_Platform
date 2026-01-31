@@ -1,0 +1,15 @@
+# Default training parameters
+learning_rate: 0.001
+batch_size: 64
+max_epochs: 100
+early_stopping_patience: 15
+weight_decay: 0.00001
+dropout: 0.1
+scheduler: cosine  # cosine, step, plateau, none
+optimizer: adam  # adam, sgd, adamw
+loss_function: cross_entropy
+val_split: 0.15
+test_split: 0.15
+random_seed: 42
+num_workers: 0
+device: auto  # auto, cuda, cpu

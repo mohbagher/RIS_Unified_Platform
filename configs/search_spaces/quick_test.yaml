@@ -1,0 +1,47 @@
+# Quick test: Fast validation with reduced parameters
+name: quick_test
+strategy: grid_search
+
+system:
+  N: 16
+  N_x: 4
+  N_y: 4
+  K: 16
+  M: 4
+  frequency: 28.0e9
+  element_spacing: 0.5
+  snr_db: 20.0
+  phase_mode: continuous
+
+training:
+  learning_rate: 0.001
+  batch_size: 32
+  max_epochs: 10
+  early_stopping_patience: 5
+  weight_decay: 0.00001
+  dropout: 0.1
+  scheduler: cosine
+  optimizer: adam
+  loss_function: cross_entropy
+  val_split: 0.15
+  test_split: 0.15
+  random_seed: 42
+  num_workers: 0
+  device: auto
+
+data_source: synthetic_rayleigh
+data_params:
+  n_samples: 1000
+
+metrics:
+  - top_1_accuracy
+
+search_space:
+  probe_type:
+    - random_uniform
+    - hadamard
+  model_type:
+    - mlp
+
+budget:
+  max_experiments: 2  # 2 probes * 1 model

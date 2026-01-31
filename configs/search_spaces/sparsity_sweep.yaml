@@ -1,0 +1,58 @@
+# Sparsity sweep: Test different M values to understand sparsity effects
+name: sparsity_sweep
+strategy: grid_search
+
+system:
+  N: 64
+  N_x: 8
+  N_y: 8
+  K: 64
+  frequency: 28.0e9
+  element_spacing: 0.5
+  snr_db: 20.0
+  phase_mode: continuous
+
+training:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 100
+  early_stopping_patience: 15
+  weight_decay: 0.00001
+  dropout: 0.1
+  scheduler: cosine
+  optimizer: adam
+  loss_function: cross_entropy
+  val_split: 0.15
+  test_split: 0.15
+  num_workers: 0
+  device: auto
+
+data_source: synthetic_rayleigh
+data_params:
+  n_samples: 10000
+
+metrics:
+  - top_1_accuracy
+  - top_5_accuracy
+  - top_10_accuracy
+
+search_space:
+  M:
+    - 4
+    - 8
+    - 16
+    - 32
+    - 48
+  probe_type:
+    - hadamard
+    - sobol
+    - dft_beams
+  model_type:
+    - mlp
+  random_seed:
+    - 42
+    - 43
+    - 44
+
+budget:
+  max_experiments: 45  # 5 M values * 3 probes * 3 seeds
