@@ -13,7 +13,7 @@ from ris_research_engine.foundation.data_types import (
     SystemConfig, TrainingConfig
 )
 from ris_research_engine.foundation.storage import ResultTracker
-from ris_research_engine.plugins.search import BaseSearchStrategy, get_search_strategy
+from ris_research_engine.plugins.search import BaseSearchStrategy, get_strategy as get_search_strategy
 from .experiment_runner import ExperimentRunner
 from .scientific_rules import ScientificRules, RuleEngine
 

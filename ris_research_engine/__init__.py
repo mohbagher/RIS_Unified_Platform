@@ -13,22 +13,48 @@ from .foundation.data_types import (
 from .foundation.storage import ResultTracker
 from .foundation.logging_config import setup_logging
 
-# Engine layer
-from .engine.experiment_runner import ExperimentRunner
-from .engine.search_controller import SearchController
-from .engine.scientific_rules import ScientificRules, RuleEngine
-from .engine.result_analyzer import ResultAnalyzer
-from .engine.report_generator import ReportGenerator
-
-# UI layer
-from .ui.jupyter_minimal import RISEngine
-
 # Plugin registries
 from .plugins.probes import get_probe, list_probes
 from .plugins.models import get_model, list_models
 from .plugins.metrics import get_metric, list_metrics
 from .plugins.data_sources import get_data_source, list_data_sources
 from .plugins.baselines import AVAILABLE_BASELINES
+
+# Engine layer - import lazily to avoid torch dependency on import
+def _lazy_import_engine():
+    """Lazy import of engine components."""
+    from .engine.experiment_runner import ExperimentRunner
+    from .engine.search_controller import SearchController
+    from .engine.scientific_rules import ScientificRules, RuleEngine
+    from .engine.result_analyzer import ResultAnalyzer
+    from .engine.report_generator import ReportGenerator
+    return (ExperimentRunner, SearchController, ScientificRules, 
+            RuleEngine, ResultAnalyzer, ReportGenerator)
+
+# UI layer - import lazily
+def _lazy_import_ui():
+    """Lazy import of UI components."""
+    from .ui.jupyter_minimal import RISEngine
+    return RISEngine,
+
+# Provide lazy imports via __getattr__
+def __getattr__(name):
+    """Lazy load heavy dependencies."""
+    if name == 'ExperimentRunner':
+        return _lazy_import_engine()[0]
+    elif name == 'SearchController':
+        return _lazy_import_engine()[1]
+    elif name == 'ScientificRules':
+        return _lazy_import_engine()[2]
+    elif name == 'RuleEngine':
+        return _lazy_import_engine()[3]
+    elif name == 'ResultAnalyzer':
+        return _lazy_import_engine()[4]
+    elif name == 'ReportGenerator':
+        return _lazy_import_engine()[5]
+    elif name == 'RISEngine':
+        return _lazy_import_ui()[0]
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
     # Version
