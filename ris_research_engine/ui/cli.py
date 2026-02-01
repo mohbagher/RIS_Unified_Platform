@@ -20,9 +20,23 @@ from ris_research_engine.plugins.baselines import AVAILABLE_BASELINES
 
 def cmd_run(args):
     """Run a single experiment."""
+    # Compute N_x and N_y from N
+    import math
+    N_x = int(math.sqrt(args.N))
+    N_y = N_x
+    if N_x * N_y != args.N:
+        # Try to find factors
+        for n_x in range(int(math.sqrt(args.N)), 0, -1):
+            if args.N % n_x == 0:
+                N_x = n_x
+                N_y = args.N // n_x
+                break
+    
     # Create configuration
     system = SystemConfig(
         N=args.N,
+        N_x=N_x,
+        N_y=N_y,
         K=args.K,
         M=args.M,
         snr_db=args.snr_db

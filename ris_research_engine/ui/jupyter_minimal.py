@@ -68,8 +68,20 @@ class RISEngine:
         if metrics is None:
             metrics = ['top_1_accuracy', 'power_ratio']
         
+        # Compute N_x and N_y from N
+        import math
+        N_x = int(math.sqrt(N))
+        N_y = N_x
+        if N_x * N_y != N:
+            # Try to find factors
+            for n_x in range(int(math.sqrt(N)), 0, -1):
+                if N % n_x == 0:
+                    N_x = n_x
+                    N_y = N // n_x
+                    break
+        
         # Create configuration
-        system = SystemConfig(N=N, K=K, M=M)
+        system = SystemConfig(N=N, N_x=N_x, N_y=N_y, K=K, M=M)
         training = TrainingConfig(
             max_epochs=max_epochs,
             learning_rate=learning_rate,
