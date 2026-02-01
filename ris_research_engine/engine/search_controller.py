@@ -52,8 +52,8 @@ class SearchController:
         Returns:
             SearchCampaignResult with all experiment results
         """
-        campaign_name = search_space_config.get('name', f'campaign_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
         timestamp = datetime.now().isoformat()
+        campaign_name = search_space_config.get('name', f'campaign_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
         start_time = time.time()
         
         logger.info(f"Starting search campaign: {campaign_name}")

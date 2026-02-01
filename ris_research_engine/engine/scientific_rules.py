@@ -120,15 +120,6 @@ def evaluate_rule(rule: Dict[str, Any], context: Dict[str, Any]) -> bool:
     # Parse condition
     try:
         result = _evaluate_condition(condition, context)
-        
-        # Apply threshold if specified
-        if 'threshold' in rule and result:
-            # For comparison rules with thresholds
-            threshold = rule['threshold']
-            # This is typically used for "A > B" where we want "A > B + threshold"
-            # The condition parser should handle this, but we can add margin here
-            pass
-        
         return result
         
     except Exception as e:

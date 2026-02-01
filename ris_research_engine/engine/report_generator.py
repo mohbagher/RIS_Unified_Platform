@@ -395,20 +395,43 @@ class ReportGenerator:
         
         df = pd.DataFrame(data)
         
-        # Identify Pareto front
+        # Identify Pareto front using vectorized operations for better performance
         # For metric1: maximize (higher is better)
         # For metric2: minimize (lower is better)
+        values = df[[metric1, metric2]].values
         pareto_mask = np.ones(len(df), dtype=bool)
         
-        for i, row_i in df.iterrows():
-            for j, row_j in df.iterrows():
-                if i != j:
-                    # Check if j dominates i
-                    if (row_j[metric1] >= row_i[metric1] and 
-                        row_j[metric2] <= row_i[metric2] and
-                        (row_j[metric1] > row_i[metric1] or row_j[metric2] < row_i[metric2])):
+        # For small datasets (< 100), use simple O(n²) algorithm
+        # For larger datasets, this could be optimized further with spatial indexing
+        if len(df) < 100:
+            for i in range(len(values)):
+                if pareto_mask[i]:
+                    # Point i is dominated by point j if:
+                    # j[metric1] >= i[metric1] AND j[metric2] <= i[metric2]
+                    # with at least one strict inequality
+                    dominated = np.logical_and(
+                        values[:, 0] >= values[i, 0],  # metric1: higher or equal
+                        values[:, 1] <= values[i, 1]   # metric2: lower or equal
+                    )
+                    # Exclude i itself and check for strict domination
+                    dominated[i] = False
+                    strictly_better = np.logical_or(
+                        values[:, 0] > values[i, 0],
+                        values[:, 1] < values[i, 1]
+                    )
+                    if np.any(np.logical_and(dominated, strictly_better)):
                         pareto_mask[i] = False
-                        break
+        else:
+            # For large datasets, use simple iteration (can be optimized further if needed)
+            logger.info(f"Computing Pareto front for {len(df)} points (may take a moment)")
+            for i in range(len(values)):
+                for j in range(len(values)):
+                    if i != j:
+                        if (values[j, 0] >= values[i, 0] and 
+                            values[j, 1] <= values[i, 1] and
+                            (values[j, 0] > values[i, 0] or values[j, 1] < values[i, 1])):
+                            pareto_mask[i] = False
+                            break
         
         df['is_pareto'] = pareto_mask
         

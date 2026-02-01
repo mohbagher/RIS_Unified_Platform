@@ -362,9 +362,21 @@ class ResultAnalyzer:
         df = pd.DataFrame(comparison_data)
         
         if len(df) > 0:
-            # Add relative gap columns
-            df['relative_gap_top_1'] = df['gap_top_1'] / (df['synthetic_top_1'] + 1e-6)
-            df['relative_gap_top_5'] = df['gap_top_5'] / (df['synthetic_top_5'] + 1e-6)
-            df['relative_gap_top_10'] = df['gap_top_10'] / (df['synthetic_top_10'] + 1e-6)
+            # Add relative gap columns (only where synthetic values are significant)
+            df['relative_gap_top_1'] = np.where(
+                df['synthetic_top_1'] > 0.01,
+                df['gap_top_1'] / df['synthetic_top_1'],
+                np.nan
+            )
+            df['relative_gap_top_5'] = np.where(
+                df['synthetic_top_5'] > 0.01,
+                df['gap_top_5'] / df['synthetic_top_5'],
+                np.nan
+            )
+            df['relative_gap_top_10'] = np.where(
+                df['synthetic_top_10'] > 0.01,
+                df['gap_top_10'] / df['synthetic_top_10'],
+                np.nan
+            )
         
         return df
