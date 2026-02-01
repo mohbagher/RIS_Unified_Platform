@@ -1,0 +1,30 @@
+# Default System Configuration Preset
+# Standard RIS system parameters for typical experiments
+
+# Number of RIS elements
+N: 64
+
+# Grid dimensions (N_x × N_y should equal N)
+N_x: 8
+N_y: 8
+
+# Codebook size (number of possible RIS configurations)
+K: 64
+
+# Sensing budget (number of probe measurements)
+M: 8
+
+# Carrier frequency (Hz) - 28 GHz mmWave
+frequency: 28.0e9
+
+# Element spacing relative to wavelength
+element_spacing: 0.5
+
+# Signal-to-noise ratio (dB)
+snr_db: 20.0
+
+# Phase quantization mode
+phase_mode: continuous  # Options: 'continuous' or 'discrete'
+
+# Number of bits for phase quantization (if discrete mode)
+phase_bits: 2

@@ -1,0 +1,44 @@
+# Default Training Configuration Preset
+# Standard hyperparameters for model training
+
+# Learning rate
+learning_rate: 0.001
+
+# Batch size
+batch_size: 64
+
+# Maximum training epochs
+max_epochs: 100
+
+# Early stopping patience (epochs without improvement)
+early_stopping_patience: 15
+
+# L2 regularization weight decay
+weight_decay: 0.00001
+
+# Dropout rate
+dropout: 0.1
+
+# Learning rate scheduler
+scheduler: cosine  # Options: 'cosine', 'step', 'plateau', 'none'
+
+# Optimizer
+optimizer: adam  # Options: 'adam', 'sgd', 'adamw'
+
+# Loss function
+loss_function: cross_entropy  # Options: 'cross_entropy', 'mse', 'mae'
+
+# Validation split ratio
+val_split: 0.15
+
+# Test split ratio
+test_split: 0.15
+
+# Random seed for reproducibility
+random_seed: 42
+
+# DataLoader workers (0 for Windows compatibility)
+num_workers: 0
+
+# Device selection
+device: auto  # Options: 'auto', 'cuda', 'cpu'
