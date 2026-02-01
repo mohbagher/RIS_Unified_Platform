@@ -1,0 +1,76 @@
+# ============================================================================
+# Quick Test Search Space
+# ============================================================================
+# Minimal configuration for fast validation and debugging.
+# Useful for:
+# - Testing pipeline before large experiments
+# - Quick sanity checks
+# - Development and debugging
+# - CI/CD validation
+#
+# Total Experiments: 2
+# Expected Runtime: ~2-3 minutes on CPU
+# ============================================================================
+
+name: "quick_test"
+description: "Fast validation configuration for testing and debugging"
+strategy: "grid_search"
+
+# Small system for speed
+system:
+  N: 16   # Reduced from 64
+  K: 16   # Reduced from 64
+  M: 4    # Reduced from 8
+  frequency: 28e9
+  snr_db: 20.0
+
+# Minimal probe comparison
+probes:
+  type:
+    - "hadamard"        # Expected best
+    - "random_uniform"  # Baseline
+
+# Simple model
+model:
+  type: "mlp"
+  hidden_dims: [64, 32]  # Small architecture
+  activation: "relu"
+  dropout: 0.1
+
+# Fast training
+training:
+  learning_rate: 0.001
+  batch_size: 32
+  max_epochs: 10  # Just 10 epochs
+  early_stopping_patience: 5
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  val_split: 0.15
+  test_split: 0.15
+
+# Minimal data
+data:
+  num_samples: 100  # Very small dataset
+  data_source: "synthetic"
+
+# Single seed for speed
+random_seeds: [42]
+
+# Basic metrics
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "val_loss"
+    - "training_time"
+
+# Minimal rules
+rules:
+  early_stopping: false  # Disabled for quick test
+  abandon_threshold: 0.0  # Never abandon in test mode
+  min_epochs: 1
+
+# Output
+output:
+  verbose: true
+  save_models: false  # Don't save to save disk space
+  save_logs: true

@@ -1,0 +1,233 @@
+# ============================================================================
+# Full Scientific Search Space
+# ============================================================================
+# Complete 4-phase scientific search strategy that progressively narrows
+# the search space based on experimental evidence.
+#
+# Strategy: Start broad, eliminate poor options, zoom into promising regions
+#
+# Phase 1: Quick probe comparison (10 epochs, all probes)
+# Phase 2: Model selection (best 2 probes, all models, 50 epochs)
+# Phase 3: Hyperparameter tuning (best model, 100 epochs)
+# Phase 4: Sparsity analysis (best config, various M values)
+#
+# Total Budget: Max 200 experiments
+# ============================================================================
+
+name: "full_scientific_search"
+description: "Complete 4-phase progressive search with scientific rules"
+strategy: "scientific_search"
+
+# Scientific search configuration
+scientific_search:
+  max_experiments: 200
+  phases:
+    - name: "phase_1_probe_screening"
+      description: "Quick screening of all probe types"
+      max_experiments: 24
+      selection_strategy: "eliminate_worst"
+      keep_top_n: 2
+      
+    - name: "phase_2_model_selection"
+      description: "Test all models with best probes"
+      max_experiments: 50
+      selection_strategy: "select_best"
+      keep_top_n: 1
+      
+    - name: "phase_3_hyperparameter_tuning"
+      description: "Fine-tune best model+probe combination"
+      max_experiments: 80
+      selection_strategy: "bayesian_optimization"
+      
+    - name: "phase_4_sparsity_validation"
+      description: "Validate best config at different sparsity levels"
+      max_experiments: 46
+      selection_strategy: "grid_search"
+
+# Phase 1: Probe Screening
+phase_1:
+  system:
+    N: 64
+    K: 64
+    M: 8
+    frequency: 28e9
+    snr_db: 20.0
+  
+  probes:
+    type:
+      - "random_uniform"
+      - "random_binary"
+      - "hadamard"
+      - "dft_beams"
+      - "sobol"
+      - "halton"
+  
+  model:
+    type: "mlp"
+    hidden_dims: [128, 64]  # Smaller for quick tests
+  
+  training:
+    max_epochs: 10  # Quick screening only
+    batch_size: 64
+    learning_rate: 0.001
+  
+  data:
+    num_samples: 5000  # Reduced for speed
+  
+  random_seeds: [42, 43, 44, 45]  # 4 seeds for statistical power
+  
+  rules:
+    abandon_if_below_random: true
+    threshold: 0.016
+
+# Phase 2: Model Selection
+phase_2:
+  # Inherits system config and best 2 probes from phase 1
+  
+  models:
+    - type: "mlp"
+      hidden_dims: [256, 128, 64]
+    - type: "cnn_1d"
+      num_filters: [64, 128, 64]
+      kernel_size: 3
+    - type: "cnn_2d"
+      num_filters: [32, 64, 32]
+      kernel_size: 3
+    - type: "lstm"
+      hidden_size: 128
+      num_layers: 2
+    - type: "transformer"
+      d_model: 128
+      nhead: 4
+      num_layers: 3
+    - type: "set_transformer"
+      d_model: 128
+      num_heads: 4
+  
+  training:
+    max_epochs: 50
+    batch_size: 64
+    learning_rate: 0.001
+    early_stopping_patience: 10
+  
+  data:
+    num_samples: 10000
+  
+  random_seeds: [42, 43]
+  
+  rules:
+    prune_clear_losers: true
+    accuracy_gap: 0.15  # Prune if best is 15% better
+
+# Phase 3: Hyperparameter Tuning
+phase_3:
+  # Inherits best model+probe from phase 2
+  
+  # Bayesian optimization search spaces
+  hyperparameters:
+    learning_rate:
+      type: "log_uniform"
+      low: 0.0001
+      high: 0.01
+    
+    batch_size:
+      type: "choice"
+      values: [32, 64, 128]
+    
+    dropout:
+      type: "uniform"
+      low: 0.0
+      high: 0.3
+    
+    weight_decay:
+      type: "log_uniform"
+      low: 1e-6
+      high: 1e-3
+    
+    # Model-specific (conditional on model type)
+    # Note: These conditions are evaluated by the Bayesian optimization
+    # strategy. If not using Bayesian optimization, these can be removed
+    # or will be ignored by grid search strategies.
+    mlp_hidden_dims:
+      type: "choice"
+      values: [[256, 128], [256, 128, 64], [512, 256, 128]]
+      condition: "model.type == 'mlp'"
+    
+    cnn_num_filters:
+      type: "choice"
+      values: [[32, 64], [64, 128, 64], [64, 128, 256]]
+      condition: "model.type in ['cnn_1d', 'cnn_2d']"
+    
+    transformer_d_model:
+      type: "choice"
+      values: [64, 128, 256]
+      condition: "model.type == 'transformer'"
+  
+  training:
+    max_epochs: 100
+    early_stopping_patience: 15
+  
+  data:
+    num_samples: 15000
+  
+  random_seeds: [42, 43, 44]
+  
+  optimization:
+    method: "bayesian"
+    acquisition_function: "expected_improvement"
+    n_initial_points: 10
+
+# Phase 4: Sparsity Validation
+phase_4:
+  # Inherits best config from phase 3
+  
+  sparsity:
+    M: [4, 8, 16, 32, 48, 64]
+  
+  training:
+    max_epochs: 100
+    early_stopping_patience: 15
+  
+  data:
+    num_samples: 15000
+  
+  random_seeds: [42, 43, 44]
+
+# Global scientific rules
+scientific_rules:
+  early_stopping:
+    enabled: true
+    patience: 15
+    min_delta: 0.001
+  
+  abandonment:
+    below_random: 0.016
+    diverged_loss: 10.0
+    min_epochs_before_abandon: 5
+  
+  pruning:
+    clear_loser_gap: 0.15
+    prefer_simpler_models: true
+    parameter_ratio_threshold: 2.0
+  
+  promotion:
+    new_best_improvement: 0.05
+    unexpected_winner_threshold: 0.7
+
+# Metrics
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "top_5_accuracy"
+    - "val_loss"
+    - "num_parameters"
+    - "training_time"
+    - "inference_time"
+
+# Reporting
+reporting:
+  save_checkpoints: true
+  log_frequency: 10
+  save_best_model: true
+  generate_summary_report: true
+  plot_phase_results: true

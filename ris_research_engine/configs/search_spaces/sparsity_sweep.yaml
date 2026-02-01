@@ -1,0 +1,85 @@
+# ============================================================================
+# Sparsity Sweep Search Space
+# ============================================================================
+# Systematic exploration of measurement sparsity (M) to understand the
+# trade-off between measurement overhead and prediction accuracy.
+#
+# Research Question: How does the number of probe measurements M affect
+# beam prediction accuracy across different probe types?
+#
+# Total Experiments: 45 (5 sparsity levels × 3 probes × 3 seeds)
+# ============================================================================
+
+name: "sparsity_sweep"
+description: "Explore measurement sparsity vs. prediction accuracy trade-off"
+strategy: "grid_search"
+
+# Fixed system configuration
+system:
+  N: 64  # Total RIS elements
+  K: 64  # Number of candidate beams
+  frequency: 28e9
+  snr_db: 20.0
+
+# Sparsity levels to explore
+# M=4: Ultra-sparse (6.25% of K)
+# M=8: Very sparse (12.5% of K)
+# M=16: Sparse (25% of K)
+# M=32: Medium (50% of K)
+# M=48: Dense (75% of K)
+sparsity:
+  M: [4, 8, 16, 32, 48]
+
+# Top probe types from probe_comparison
+probes:
+  type:
+    - "hadamard"    # Expected best: orthogonal structure
+    - "dft_beams"   # Expected good: beam-aligned
+    - "sobol"       # Expected good: quasi-random coverage
+
+# Fixed model configuration
+model:
+  type: "mlp"
+  hidden_dims: [256, 128, 64]
+  activation: "relu"
+  dropout: 0.1
+
+# Training configuration
+training:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 100
+  early_stopping_patience: 15
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  val_split: 0.15
+  test_split: 0.15
+
+# Data generation
+data:
+  num_samples: 10000
+  data_source: "synthetic"
+
+# Random seeds for statistical significance
+random_seeds: [42, 43, 44]
+
+# Metrics to track
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "top_5_accuracy"
+    - "val_loss"
+    - "measurement_efficiency"  # accuracy per measurement
+    - "training_time"
+
+# Scientific rules
+rules:
+  early_stopping: true
+  abandon_threshold: 0.016
+  min_epochs: 10
+
+# Analysis directives
+analysis:
+  plot_sparsity_curve: true
+  compute_pareto_frontier: true  # Accuracy vs. M trade-off
+  statistical_significance: true

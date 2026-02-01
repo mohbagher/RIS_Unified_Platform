@@ -1,0 +1,170 @@
+# ============================================================================
+# Early Stopping Rules
+# ============================================================================
+# Scientific rules for experiment abandonment and early stopping to
+# efficiently allocate computational resources.
+#
+# Two categories:
+# 1. Abandon Rules: Stop experiments that are clearly failing
+# 2. Early Stop Rules: Stop experiments that have converged or diverged
+# ============================================================================
+
+name: "early_stopping_rules"
+description: "Rules for abandoning and early-stopping experiments"
+
+# ============================================================================
+# Abandon Rules - Stop clearly failing experiments immediately
+# ============================================================================
+abandon_rules:
+  # Rule 1: Performance below random baseline
+  - name: "below_random_baseline"
+    description: "Accuracy worse than random guessing - no learning occurring"
+    condition:
+      metric: "top_1_accuracy"
+      operator: "<"
+      threshold: 0.016  # 1/K for K=64 (random guessing)
+      min_epoch: 10     # Give at least 10 epochs to learn
+    action: "abandon"
+    reason: "No learning - accuracy below random baseline"
+    
+  # Rule 2: Training loss diverged
+  - name: "training_diverged"
+    description: "Training loss exploding - numerical instability"
+    condition:
+      metric: "train_loss"
+      operator: ">"
+      threshold: 10.0
+      min_epoch: 5
+    action: "abandon"
+    reason: "Training diverged - loss exploding"
+    
+  # Rule 3: NaN or Inf loss
+  - name: "invalid_loss"
+    description: "Loss became NaN or Inf - critical failure"
+    condition:
+      metric: "train_loss"
+      operator: "is_invalid"  # Checks for NaN, Inf
+    action: "abandon"
+    reason: "Invalid loss value (NaN/Inf)"
+    
+  # Rule 4: Validation accuracy stagnant at low value
+  - name: "stuck_at_low_accuracy"
+    description: "Validation accuracy not improving from very low baseline"
+    condition:
+      metric: "val_accuracy"
+      operator: "<"
+      threshold: 0.05
+      num_epochs: 20  # Stuck for 20 epochs
+      min_epoch: 20
+    action: "abandon"
+    reason: "Stuck at very low accuracy"
+
+# ============================================================================
+# Early Stop Rules - Stop converged or overfitting experiments
+# ============================================================================
+early_stop_rules:
+  # Rule 1: Validation loss converged
+  - name: "val_loss_converged"
+    description: "Validation loss stopped improving - model converged"
+    condition:
+      metric: "val_loss"
+      operator: "no_improvement"
+      patience: 10              # No improvement for 10 epochs
+      min_delta: 0.001          # Improvement must be > 0.001 to count
+      min_epoch: 20             # Don't stop before epoch 20
+    action: "early_stop"
+    reason: "Validation loss converged"
+    save_checkpoint: true
+    
+  # Rule 2: Overfitting detected
+  - name: "overfitting_detected"
+    description: "Train loss decreasing but val loss increasing - overfitting"
+    condition:
+      type: "divergence"
+      train_metric: "train_loss"
+      val_metric: "val_loss"
+      train_direction: "decreasing"  # Train loss going down
+      val_direction: "increasing"    # Val loss going up
+      patience: 15                   # Diverging for 15 epochs
+      min_epoch: 25
+    action: "early_stop"
+    reason: "Overfitting - train/val divergence"
+    save_checkpoint: true  # Save best checkpoint before overfitting
+    
+  # Rule 3: Accuracy plateaued
+  - name: "accuracy_plateaued"
+    description: "Top-1 accuracy stopped improving"
+    condition:
+      metric: "top_1_accuracy"
+      operator: "no_improvement"
+      patience: 15
+      min_delta: 0.005  # Improvement must be > 0.5% to count
+      min_epoch: 30
+    action: "early_stop"
+    reason: "Accuracy plateaued"
+    save_checkpoint: true
+    
+  # Rule 4: Training completed successfully
+  - name: "max_epochs_reached"
+    description: "Reached maximum training epochs"
+    condition:
+      type: "max_epochs"
+    action: "complete"
+    reason: "Training completed successfully"
+    save_checkpoint: true
+
+# ============================================================================
+# Global Configuration
+# ============================================================================
+config:
+  # Check frequency
+  check_frequency: 1  # Check rules every N epochs
+  
+  # Minimum epochs before any stopping
+  min_epochs_before_stop: 10
+  
+  # Checkpoint policy
+  checkpoint_policy:
+    save_best: true           # Always save best model
+    save_on_early_stop: true  # Save when early stopping
+    metric: "val_loss"        # Metric to determine "best"
+    mode: "min"               # Minimize val_loss
+  
+  # Logging
+  log_rule_checks: true       # Log when rules are evaluated
+  log_rule_triggers: true     # Log when rules trigger
+  
+  # Priority (rules checked in order)
+  rule_priority:
+    - "abandon_rules"   # Check abandon rules first
+    - "early_stop_rules"  # Then early stop rules
+
+# ============================================================================
+# Rule Evaluation
+# ============================================================================
+evaluation:
+  # Smoothing for noisy metrics
+  smoothing:
+    enabled: true
+    window_size: 3  # Moving average over 3 epochs
+    metrics:
+      - "val_loss"
+      - "train_loss"
+  
+  # Statistical significance
+  significance_test:
+    enabled: false  # Disabled by default for speed
+    method: "t_test"
+    alpha: 0.05
+
+# ============================================================================
+# Experiment-Specific Overrides
+# ============================================================================
+# These can be overridden in search space configs
+overrides:
+  allow_experiment_override: true
+  overridable_parameters:
+    - "patience"
+    - "min_delta"
+    - "min_epoch"
+    - "threshold"

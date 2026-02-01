@@ -1,0 +1,204 @@
+# ============================================================================
+# Default System Configuration
+# ============================================================================
+# Standard RIS system parameters for synthetic data generation and experiments.
+# These represent a typical mmWave RIS deployment scenario.
+#
+# Usage: Import these defaults in experiment configs or override as needed.
+# ============================================================================
+
+name: "default_system"
+description: "Standard RIS system configuration for mmWave beam prediction"
+version: "1.0.0"
+
+# ============================================================================
+# RIS Geometry
+# ============================================================================
+ris:
+  # Total elements
+  N: 64
+  
+  # Array dimensions (N = N_x × N_y)
+  N_x: 8   # Horizontal elements
+  N_y: 8   # Vertical elements
+  
+  # Element spacing (in wavelengths)
+  element_spacing: 0.5  # λ/2 spacing
+  
+  # Array configuration
+  array_type: "uniform_rectangular"  # URA configuration
+  
+  # Phase configuration
+  phase_mode: "continuous"  # 'continuous' or 'discrete'
+  phase_bits: 2             # Bits for discrete phase (2-bit = 4 states)
+  phase_quantization: [0, 90, 180, 270]  # Degrees (for 2-bit)
+  
+  # Amplitude configuration
+  amplitude_control: false  # True if amplitude tuning available
+  amplitude_bits: 0         # Bits for amplitude (0 = no control)
+
+# ============================================================================
+# Beam Configuration
+# ============================================================================
+beams:
+  # Number of candidate beams
+  K: 64
+  
+  # Beam codebook type
+  codebook_type: "dft"  # 'dft', 'hadamard', 'hierarchical'
+  
+  # Beam coverage
+  azimuth_range: [-60, 60]    # Degrees
+  elevation_range: [-30, 30]  # Degrees
+  
+  # Beam selection criterion
+  selection_metric: "received_power"  # 'received_power', 'snr', 'sinr'
+
+# ============================================================================
+# Measurement/Probe Configuration
+# ============================================================================
+measurements:
+  # Number of probe measurements
+  M: 8
+  
+  # Default probe type
+  default_probe_type: "hadamard"
+  
+  # Probe strategies available
+  available_probe_types:
+    - "random_uniform"
+    - "random_binary"
+    - "hadamard"
+    - "dft_beams"
+    - "sobol"
+    - "halton"
+  
+  # Measurement noise
+  measurement_noise: true
+  noise_type: "awgn"  # Additive White Gaussian Noise
+
+# ============================================================================
+# RF/Channel Parameters
+# ============================================================================
+rf:
+  # Carrier frequency
+  frequency: 28e9  # 28 GHz (mmWave)
+  
+  # Wavelength (derived)
+  wavelength: 0.0107  # meters (c/f ≈ 10.7 mm)
+  
+  # Bandwidth
+  bandwidth: 100e6  # 100 MHz
+  
+  # SNR
+  snr_db: 20.0  # 20 dB (typical good condition)
+  
+  # Noise figure
+  noise_figure_db: 7.0  # Typical BS noise figure
+  
+  # Transmit power
+  tx_power_dbm: 30.0  # 1 W transmit power
+
+# ============================================================================
+# Channel Model (Synthetic)
+# ============================================================================
+channel:
+  # Channel model type
+  model_type: "geometric"  # 'geometric', 'statistical', 'raytracing'
+  
+  # Number of paths
+  num_paths: 5  # Sparse mmWave channel
+  
+  # Path configuration
+  path_loss_exponent: 2.5
+  shadowing_std_db: 8.0
+  
+  # Angular spread
+  azimuth_spread_deg: 10.0
+  elevation_spread_deg: 5.0
+  
+  # Mobility
+  mobility: false
+  doppler_max_hz: 0.0
+
+# ============================================================================
+# Scenario Parameters
+# ============================================================================
+scenario:
+  # Deployment scenario
+  type: "urban_micro"  # 'urban_micro', 'urban_macro', 'indoor'
+  
+  # Geometry
+  bs_height: 10.0      # Base station height (m)
+  ue_height: 1.5       # User equipment height (m)
+  ris_height: 5.0      # RIS height (m)
+  
+  # Distance ranges
+  min_distance: 10.0   # Minimum UE distance (m)
+  max_distance: 100.0  # Maximum UE distance (m)
+  
+  # Environment
+  los_probability: 0.5  # 50% LOS probability
+  blockage_enabled: false
+
+# ============================================================================
+# Data Generation
+# ============================================================================
+data_generation:
+  # Default dataset size
+  default_num_samples: 10000
+  
+  # Train/val/test splits
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  
+  # Sampling strategy
+  sampling_strategy: "uniform"  # 'uniform', 'clustered', 'importance'
+  
+  # Reproducibility
+  random_seed: 42
+  
+  # Parallelization
+  num_workers: 0  # 0 = auto-detect
+  batch_generation: true
+  batch_size: 1000
+
+# ============================================================================
+# Normalization
+# ============================================================================
+normalization:
+  # Input normalization
+  input_normalization: "standard"  # 'standard', 'minmax', 'none'
+  input_mean: 0.0
+  input_std: 1.0
+  
+  # Output normalization (if regression)
+  output_normalization: "none"  # Classification doesn't need this
+
+# ============================================================================
+# Hardware Constraints
+# ============================================================================
+hardware:
+  # Phase shifter constraints
+  phase_shifter_resolution: 2  # bits
+  phase_shifter_error_deg: 5.0  # RMS phase error
+  
+  # Timing constraints
+  switching_time_us: 1.0    # Time to reconfigure RIS
+  measurement_time_us: 0.1  # Time per measurement
+  
+  # Power constraints
+  power_consumption_mw: 100  # RIS power consumption
+
+# ============================================================================
+# Metadata
+# ============================================================================
+metadata:
+  created_by: "RIS Research Team"
+  date_created: "2024-02-01"
+  compatible_versions: ["1.0.0", "1.1.0"]
+  description: |
+    Standard configuration for RIS beam prediction experiments.
+    Represents a typical mmWave RIS deployment with 64 elements
+    and 64 candidate beams in an urban micro scenario.
