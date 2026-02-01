@@ -14,9 +14,11 @@ def main():
     
     # Configure system
     system = SystemConfig(
-        N=16,  # Small RIS array for quick test
-        K=16,  # Small codebook
-        M=4    # Minimal sensing budget
+        N=16,   # Small RIS array for quick test
+        N_x=4,  # 4x4 grid
+        N_y=4,
+        K=16,   # Small codebook
+        M=4     # Minimal sensing budget
     )
     
     # Configure training

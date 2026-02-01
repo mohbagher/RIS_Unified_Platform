@@ -51,7 +51,6 @@ class ExperimentRunner:
         try:
             # Validate configurations
             config.system.validate()
-            config.training.validate()
             
             # Set device
             device = self._get_device(config.training.device)
@@ -75,7 +74,8 @@ class ExperimentRunner:
             
             # Build model
             logger.info(f"Building model: {config.model_type}...")
-            model = self._build_model(config, train_inputs.shape[1], data['train_targets'].shape[1])
+            output_dim = data['train_targets'].shape[1] if data['train_targets'].ndim > 1 else config.system.K
+            model = self._build_model(config, train_inputs.shape[1], output_dim)
             model = model.to(device)
             
             # Count parameters
@@ -137,7 +137,7 @@ class ExperimentRunner:
             )
             
             # Save to database
-            self.tracker.save_result(result)
+            self.tracker.save_experiment(result)
             logger.info(f"Experiment completed successfully in {training_time:.2f}s")
             
             return result
@@ -165,7 +165,7 @@ class ExperimentRunner:
             )
             
             # Save failed result
-            self.tracker.save_result(result)
+            self.tracker.save_experiment(result)
             
             return result
     
@@ -366,22 +366,27 @@ class ExperimentRunner:
             for inputs, targets in test_loader:
                 inputs = inputs.to(device)
                 outputs = model(inputs)
-                all_outputs.append(outputs.cpu().numpy())
-                all_targets.append(targets.cpu().numpy())
+                all_outputs.append(outputs.cpu())
+                all_targets.append(targets.cpu())
         
-        all_outputs = np.concatenate(all_outputs, axis=0)
-        all_targets = np.concatenate(all_targets, axis=0)
+        all_outputs = torch.cat(all_outputs, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
         
         # Convert targets to indices if they're one-hot
         if all_targets.ndim > 1 and all_targets.shape[1] > 1:
-            all_targets = all_targets.argmax(axis=1)
+            all_targets = all_targets.argmax(dim=1)
         
         # Calculate metrics
         results = {}
         for metric_name in metric_names:
             try:
                 metric = get_metric(metric_name)
-                value = metric.compute(all_outputs, all_targets, test_powers, codebook)
+                # Metrics expect (predictions, targets, metadata=None)
+                metadata = {
+                    'test_powers': test_powers,
+                    'codebook': codebook
+                }
+                value = metric.compute(all_outputs, all_targets, metadata)
                 results[metric_name] = float(value)
             except Exception as e:
                 logger.warning(f"Failed to compute metric {metric_name}: {e}")
@@ -400,6 +405,7 @@ class ExperimentRunner:
         test_powers = data.get('test_powers', data.get('test_inputs'))
         test_targets = data.get('test_targets')
         codebook = data.get('codebook')
+        K = codebook.shape[0] if codebook is not None else test_powers.shape[1]
         
         # Apply probes to test data
         test_measurements = test_powers[:, :probe_matrix.shape[0]]
@@ -408,20 +414,36 @@ class ExperimentRunner:
             try:
                 baseline = baseline_class()
                 
-                # Get baseline predictions
-                predictions = baseline.predict(
-                    test_measurements, probe_matrix,
-                    codebook if codebook is not None else np.eye(test_powers.shape[1])
-                )
+                # Get baseline predictions for each sample
+                # Baseline returns scores for all K configurations
+                all_predictions = []
+                for i in range(test_measurements.shape[0]):
+                    scores = baseline.predict(
+                        test_measurements[i],
+                        np.arange(probe_matrix.shape[0]),
+                        K
+                    )
+                    all_predictions.append(scores)
+                
+                predictions = np.array(all_predictions)
+                
+                # Convert to torch tensors for metric computation
+                predictions_tensor = torch.FloatTensor(predictions)
+                targets_tensor = torch.LongTensor(test_targets) if test_targets.ndim == 1 else torch.FloatTensor(test_targets)
                 
                 # Calculate metrics
                 metrics = {}
                 for metric_name in metric_names:
                     try:
                         metric = get_metric(metric_name)
-                        value = metric.compute(predictions, test_targets, test_powers, codebook)
+                        metadata = {
+                            'test_powers': test_powers,
+                            'codebook': codebook
+                        }
+                        value = metric.compute(predictions_tensor, targets_tensor, metadata)
                         metrics[metric_name] = float(value)
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Failed to compute {metric_name} for baseline {baseline_name}: {e}")
                         metrics[metric_name] = 0.0
                 
                 baseline_results[baseline_name] = metrics

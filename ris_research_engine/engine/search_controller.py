@@ -11,7 +11,7 @@ from ris_research_engine.foundation import (
     SystemConfig, TrainingConfig, ExperimentConfig, 
     ExperimentResult, SearchCampaignResult
 )
-from ris_research_engine.plugins.search import get_search_strategy
+from ris_research_engine.plugins.search import get_strategy
 from .experiment_runner import ExperimentRunner
 
 logger = logging.getLogger(__name__)
@@ -56,10 +56,26 @@ class SearchController:
         logger.info(f"Search strategy: {search_strategy}")
         
         # Get search strategy instance
-        strategy = get_search_strategy(search_strategy)
+        strategy_class = get_strategy(search_strategy)
+        strategy = strategy_class()
         
-        # Generate experiment configurations
-        configs = strategy.generate_configs(search_space, **strategy_kwargs)
+        # Initialize strategy with search space and budget
+        budget = strategy_kwargs.get('budget', {'max_experiments': 100})
+        rules = strategy_kwargs.get('rules', {})
+        strategy.initialize(search_space, budget, rules)
+        
+        # Generate experiment configurations by repeatedly calling suggest_next
+        configs = []
+        past_results = []
+        while True:
+            config = strategy.suggest_next(past_results)
+            if config is None:
+                break
+            configs.append(config)
+            # Limit to prevent infinite loops
+            if len(configs) >= budget.get('max_experiments', 100):
+                break
+        
         logger.info(f"Generated {len(configs)} experiment configurations")
         
         # Run experiments
@@ -87,12 +103,14 @@ class SearchController:
                 failed += 1
             
             # Check if strategy wants to prune remaining experiments
-            if hasattr(strategy, 'should_prune'):
-                if strategy.should_prune(results):
-                    logger.info("Search strategy triggered early pruning")
-                    # Mark remaining experiments as pruned
-                    pruned += len(configs) - i - 1
-                    break
+            should_prune_result = strategy.should_prune({
+                'partial_results': results[-1].to_dict() if results else {}
+            })
+            if should_prune_result[0]:  # should_prune returns (bool, reason)
+                logger.info(f"Search strategy triggered early pruning: {should_prune_result[1]}")
+                # Mark remaining experiments as pruned
+                pruned += len(configs) - i - 1
+                break
         
         # Find best result
         best_result = None
