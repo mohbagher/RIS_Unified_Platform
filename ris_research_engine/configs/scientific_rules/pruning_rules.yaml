@@ -1,0 +1,242 @@
+# ============================================================================
+# Pruning Rules
+# ============================================================================
+# Scientific rules for pruning inferior experiments during multi-config
+# searches to allocate resources to promising configurations.
+#
+# Used in comparative experiments (probe_comparison, model_comparison)
+# and during scientific search phases.
+# ============================================================================
+
+name: "pruning_rules"
+description: "Rules for pruning inferior configurations during search"
+
+# ============================================================================
+# Comparison-Based Pruning
+# ============================================================================
+comparison_rules:
+  # Rule 1: Clear loser
+  - name: "clear_loser"
+    description: "This config is significantly worse than current best"
+    condition:
+      type: "accuracy_gap"
+      current_best_metric: "top_1_accuracy"
+      this_metric: "top_1_accuracy"
+      operator: ">"
+      gap: 0.15  # Prune if best is 15% better
+      min_epoch: 20  # Must have at least 20 epochs for fair comparison
+    action: "prune"
+    reason: "Accuracy gap > 15% from current best"
+    confidence: "high"
+    
+  # Rule 2: Unlikely to catch up
+  - name: "unlikely_to_catch_up"
+    description: "Learning rate suggests won't reach current best"
+    condition:
+      type: "trajectory_analysis"
+      current_best_metric: "top_1_accuracy"
+      this_metric: "top_1_accuracy"
+      analyze_slope: true
+      epochs_to_project: 30  # Project 30 epochs forward
+      catch_up_probability: 0.1  # Less than 10% chance to catch up
+      min_epoch: 30
+    action: "prune"
+    reason: "Trajectory analysis: unlikely to catch up"
+    confidence: "medium"
+    
+  # Rule 3: Consistently worse
+  - name: "consistently_worse"
+    description: "Consistently worse over multiple checkpoints"
+    condition:
+      type: "consistent_comparison"
+      metric: "top_1_accuracy"
+      num_checkpoints: 5  # Check last 5 checkpoints
+      consistently_worse: true  # Worse at all 5 checkpoints
+      min_epoch: 25
+    action: "prune"
+    reason: "Consistently worse over 5 checkpoints"
+    confidence: "high"
+
+# ============================================================================
+# Efficiency-Based Pruning
+# ============================================================================
+efficiency_rules:
+  # Rule 1: Similar accuracy but much more complex
+  - name: "prefer_simplicity"
+    description: "Similar accuracy but significantly more complex"
+    condition:
+      type: "pareto_dominated"
+      accuracy_metric: "top_1_accuracy"
+      complexity_metric: "num_parameters"
+      accuracy_tolerance: 0.02  # Within 2% accuracy
+      complexity_ratio: 2.0     # But 2x more parameters
+      min_epoch: 30
+    action: "prune"
+    reason: "More complex with similar accuracy - prefer simpler"
+    confidence: "medium"
+    
+  # Rule 2: Too slow for marginal gain
+  - name: "diminishing_returns"
+    description: "Much slower training for minimal accuracy gain"
+    condition:
+      type: "efficiency_dominated"
+      accuracy_metric: "top_1_accuracy"
+      time_metric: "training_time_per_epoch"
+      accuracy_gain: 0.03       # Only 3% better
+      time_ratio: 3.0           # But 3x slower
+      min_epoch: 20
+    action: "prune"
+    reason: "Marginal accuracy gain not worth 3x training time"
+    confidence: "low"  # Conservative - might be worth it for production
+
+# ============================================================================
+# Statistical Pruning
+# ============================================================================
+statistical_rules:
+  # Rule 1: Statistically significantly worse
+  - name: "statistically_worse"
+    description: "Statistically significantly worse across random seeds"
+    condition:
+      type: "statistical_test"
+      metric: "top_1_accuracy"
+      test: "t_test"
+      alpha: 0.05               # 5% significance level
+      alternative: "less"       # Test if this < best
+      min_seeds: 3              # Need at least 3 seeds
+      min_epoch: 30
+    action: "prune"
+    reason: "Statistically significantly worse (p < 0.05)"
+    confidence: "high"
+    
+  # Rule 2: No statistical difference but less stable
+  - name: "less_stable"
+    description: "Similar mean but much higher variance"
+    condition:
+      type: "variance_comparison"
+      metric: "top_1_accuracy"
+      mean_tolerance: 0.01      # Similar mean (within 1%)
+      variance_ratio: 2.0       # But 2x higher variance
+      min_seeds: 3
+      min_epoch: 30
+    action: "prune"
+    reason: "Less stable with similar mean performance"
+    confidence: "low"
+
+# ============================================================================
+# Resource-Aware Pruning
+# ============================================================================
+resource_rules:
+  # Rule 1: Budget exhaustion imminent
+  - name: "budget_preservation"
+    description: "Budget low - prune marginal configs to save for promising ones"
+    condition:
+      type: "budget_aware"
+      remaining_budget_fraction: 0.2  # Less than 20% budget left
+      accuracy_rank: ">3"              # Not in top 3
+      min_epoch: 15
+    action: "prune"
+    reason: "Low budget - focusing on top performers"
+    confidence: "medium"
+    
+  # Rule 2: Memory constraints
+  - name: "memory_constrained"
+    description: "Model too large for available memory"
+    condition:
+      type: "resource_limit"
+      metric: "memory_usage"
+      threshold: 0.9  # Using > 90% of available memory
+    action: "prune"
+    reason: "Memory usage exceeds safe threshold"
+    confidence: "high"
+
+# ============================================================================
+# Domain-Specific Pruning
+# ============================================================================
+domain_rules:
+  # Rule 1: Probe-specific baseline
+  - name: "probe_underperforming"
+    description: "Probe type performing below expected baseline"
+    condition:
+      type: "domain_baseline"
+      probe_type: "hadamard"
+      expected_min_accuracy: 0.5  # Hadamard should get >50%
+      min_epoch: 20
+    action: "prune"
+    reason: "Probe type underperforming expected baseline"
+    confidence: "medium"
+    
+  # Rule 2: Model capacity mismatch
+  - name: "capacity_mismatch"
+    description: "Model clearly too small or too large"
+    condition:
+      type: "capacity_analysis"
+      train_val_gap: 0.3  # 30% gap suggests capacity issue
+      direction: "either"  # Underfitting or overfitting
+      min_epoch: 30
+    action: "prune"
+    reason: "Model capacity mismatch detected"
+    confidence: "low"
+
+# ============================================================================
+# Global Configuration
+# ============================================================================
+config:
+  # Pruning policy
+  pruning_policy:
+    enabled: true
+    aggressive: false  # Conservative pruning by default
+    min_configs_to_keep: 2  # Never prune below 2 configs
+    
+  # Safety checks
+  safety:
+    require_minimum_epochs: true
+    min_epochs: 15  # Global minimum before any pruning
+    require_multiple_seeds: false  # Don't require multiple seeds
+    preserve_diversity: true  # Keep diverse configs even if not best
+    
+  # Confidence thresholds
+  confidence_thresholds:
+    high: "prune_immediately"
+    medium: "prune_if_budget_limited"
+    low: "prune_only_if_necessary"
+  
+  # Logging
+  log_pruning_decisions: true
+  log_pruning_analysis: true
+  save_pruned_checkpoints: false  # Don't save pruned models
+
+# ============================================================================
+# Rule Evaluation Order
+# ============================================================================
+evaluation:
+  # Check rules in priority order
+  priority:
+    - "comparison_rules"    # Check comparison first
+    - "statistical_rules"   # Then statistical significance
+    - "efficiency_rules"    # Then efficiency
+    - "resource_rules"      # Then resource constraints
+    - "domain_rules"        # Finally domain-specific
+  
+  # Ensemble decision
+  ensemble:
+    enabled: true
+    method: "majority_vote"  # Multiple rules must agree
+    min_rules_to_agree: 2    # At least 2 rules must trigger
+    
+  # Override protection
+  protected_configs:
+    protect_best: true       # Never prune current best
+    protect_most_recent: true  # Never prune most recent addition
+    protect_diverse: true    # Protect diverse architectures
+
+# ============================================================================
+# Experiment-Specific Overrides
+# ============================================================================
+overrides:
+  allow_experiment_override: true
+  overridable_parameters:
+    - "gap"
+    - "accuracy_tolerance"
+    - "complexity_ratio"
+    - "min_epoch"
+    - "confidence"

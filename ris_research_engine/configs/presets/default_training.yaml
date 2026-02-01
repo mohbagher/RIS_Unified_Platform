@@ -1,47 +1,361 @@
-# Default Training Configuration Preset
-# Standard hyperparameters for model training
+# ============================================================================
+# Default Training Configuration
+# ============================================================================
+# Standard training hyperparameters and settings for neural network training.
+# These defaults are suitable for most RIS beam prediction tasks.
+#
+# Usage: Import these defaults in experiment configs or override as needed.
+# ============================================================================
 
-# Learning rate
-learning_rate: 0.001
+name: "default_training"
+description: "Standard training configuration for RIS beam prediction models"
+version: "1.0.0"
 
-# Batch size
-batch_size: 64
+# ============================================================================
+# Optimizer Configuration
+# ============================================================================
+optimizer:
+  # Optimizer type
+  type: "adam"  # 'adam', 'adamw', 'sgd', 'rmsprop'
+  
+  # Learning rate
+  learning_rate: 0.001  # 1e-3
+  
+  # Adam-specific parameters
+  adam:
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1e-8
+    amsgrad: false
+  
+  # AdamW-specific parameters
+  adamw:
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1e-8
+    weight_decay: 0.01
+  
+  # SGD-specific parameters
+  sgd:
+    momentum: 0.9
+    nesterov: true
+    dampening: 0.0
+  
+  # Gradient clipping
+  gradient_clipping:
+    enabled: false
+    max_norm: 1.0
+    norm_type: 2
 
-# Maximum training epochs
-max_epochs: 100
+# ============================================================================
+# Learning Rate Scheduler
+# ============================================================================
+scheduler:
+  # Scheduler type
+  type: "cosine"  # 'cosine', 'step', 'plateau', 'exponential', 'none'
+  
+  # Cosine annealing parameters
+  cosine:
+    T_max: 100  # Maximum epochs
+    eta_min: 1e-6  # Minimum learning rate
+    warmup_epochs: 5
+    warmup_start_lr: 1e-5
+  
+  # Step decay parameters
+  step:
+    step_size: 30  # Decay every 30 epochs
+    gamma: 0.1     # Multiply LR by 0.1
+  
+  # Plateau parameters
+  plateau:
+    mode: "min"        # Monitor 'min' or 'max'
+    factor: 0.5        # Multiply LR by 0.5
+    patience: 10       # Wait 10 epochs
+    threshold: 0.001
+    cooldown: 5
+    min_lr: 1e-6
+  
+  # Exponential decay parameters
+  exponential:
+    gamma: 0.95  # Decay rate
 
-# Early stopping patience (epochs without improvement)
-early_stopping_patience: 15
+# ============================================================================
+# Training Loop Configuration
+# ============================================================================
+training:
+  # Epochs
+  max_epochs: 100
+  min_epochs: 10  # Minimum epochs before early stopping
+  
+  # Batch size
+  batch_size: 64
+  
+  # Accumulation steps (for effective larger batch)
+  gradient_accumulation_steps: 1
+  
+  # Mixed precision training
+  mixed_precision: false  # Set true for faster training on GPU
+  
+  # Reproducibility
+  deterministic: false  # Set true for reproducible results (may be slower)
+  benchmark: true       # cudnn.benchmark (faster but less deterministic)
 
-# L2 regularization weight decay
-weight_decay: 0.00001
+# ============================================================================
+# Regularization
+# ============================================================================
+regularization:
+  # Weight decay (L2 regularization)
+  weight_decay: 1e-5  # 0.00001
+  
+  # Dropout
+  dropout: 0.1
+  
+  # Dropconnect (for specific layers)
+  dropconnect: 0.0
+  
+  # Label smoothing
+  label_smoothing: 0.0  # 0.1 for soft targets
+  
+  # Data augmentation (for RIS measurements)
+  data_augmentation:
+    enabled: false
+    noise_std: 0.01
+    phase_jitter_deg: 5.0
 
-# Dropout rate
-dropout: 0.1
+# ============================================================================
+# Loss Function
+# ============================================================================
+loss:
+  # Loss type
+  type: "cross_entropy"  # 'cross_entropy', 'focal', 'label_smoothing'
+  
+  # Class weights (for imbalanced data)
+  class_weights: null  # null or array of weights
+  
+  # Focal loss parameters (if using focal loss)
+  focal:
+    alpha: 0.25
+    gamma: 2.0
+  
+  # Auxiliary losses (optional)
+  auxiliary_losses:
+    enabled: false
+    top_k_loss_weight: 0.0  # Weight for top-k accuracy loss
 
-# Learning rate scheduler
-scheduler: cosine  # Options: 'cosine', 'step', 'plateau', 'none'
+# ============================================================================
+# Early Stopping
+# ============================================================================
+early_stopping:
+  # Enable early stopping
+  enabled: true
+  
+  # Patience (epochs to wait for improvement)
+  patience: 15
+  
+  # Minimum delta (minimum change to count as improvement)
+  min_delta: 0.001
+  
+  # Metric to monitor
+  monitor: "val_loss"  # 'val_loss', 'val_accuracy', 'train_loss'
+  mode: "min"          # 'min' for loss, 'max' for accuracy
+  
+  # Restore best weights
+  restore_best_weights: true
 
-# Optimizer
-optimizer: adam  # Options: 'adam', 'sgd', 'adamw'
+# ============================================================================
+# Data Configuration
+# ============================================================================
+data:
+  # Dataset splits
+  train_split: 0.7   # 70% for training
+  val_split: 0.15    # 15% for validation
+  test_split: 0.15   # 15% for testing
+  
+  # Data loading
+  num_workers: 0     # 0 for main process, >0 for multiprocessing
+  pin_memory: true   # Pin memory for faster GPU transfer
+  prefetch_factor: 2 # Prefetch batches
+  
+  # Shuffling
+  shuffle_train: true
+  shuffle_val: false
+  shuffle_test: false
+  
+  # Drop last batch (if incomplete)
+  drop_last: false
 
-# Loss function
-loss_function: cross_entropy  # Options: 'cross_entropy', 'mse', 'mae'
+# ============================================================================
+# Validation
+# ============================================================================
+validation:
+  # Validation frequency
+  validate_every_n_epochs: 1
+  
+  # Validation during training
+  validate_during_training: true
+  
+  # Metrics to compute
+  metrics:
+    - "accuracy"
+    - "top_5_accuracy"
+    - "loss"
+    - "confusion_matrix"
 
-# Validation split ratio
-val_split: 0.15
+# ============================================================================
+# Checkpointing
+# ============================================================================
+checkpointing:
+  # Enable checkpointing
+  enabled: true
+  
+  # Save frequency
+  save_every_n_epochs: 10
+  save_best_only: true  # Only save when validation improves
+  
+  # What to save
+  save_optimizer_state: true
+  save_scheduler_state: true
+  
+  # Checkpoint directory
+  checkpoint_dir: "outputs/checkpoints"
+  
+  # Keep only best N checkpoints
+  keep_top_n: 3
+  
+  # Metric to determine "best"
+  monitor: "val_loss"
+  mode: "min"
 
-# Test split ratio
-test_split: 0.15
+# ============================================================================
+# Logging
+# ============================================================================
+logging:
+  # Log frequency
+  log_every_n_steps: 10
+  
+  # Console logging
+  console_log_level: "INFO"  # 'DEBUG', 'INFO', 'WARNING', 'ERROR'
+  
+  # File logging
+  log_to_file: true
+  log_file: "outputs/logs/training.log"
+  
+  # TensorBoard
+  tensorboard:
+    enabled: false
+    log_dir: "outputs/tensorboard"
+    
+  # Weights & Biases
+  wandb:
+    enabled: false
+    project: "ris_beam_prediction"
+    entity: null
+    
+  # MLflow
+  mlflow:
+    enabled: false
+    tracking_uri: "outputs/mlruns"
+    experiment_name: "ris_experiments"
 
-# Random seed for reproducibility
-random_seed: 42
+# ============================================================================
+# Device Configuration
+# ============================================================================
+device:
+  # Device selection
+  type: "auto"  # 'auto', 'cpu', 'cuda', 'cuda:0', 'mps'
+  
+  # Multi-GPU training
+  multi_gpu:
+    enabled: false
+    strategy: "ddp"  # 'ddp', 'dp', 'deepspeed'
+    backend: "nccl"  # 'nccl', 'gloo'
+  
+  # Memory management
+  memory:
+    empty_cache_every_n_steps: 0  # 0 = disabled
+    max_memory_allocated_gb: null  # null = no limit
 
-# DataLoader workers (0 for Windows compatibility)
-num_workers: 0
+# ============================================================================
+# Random Seeds
+# ============================================================================
+random_seed:
+  # Master seed
+  seed: 42
+  
+  # Seed components
+  numpy_seed: 42
+  torch_seed: 42
+  python_seed: 42
+  
+  # Environment variables
+  set_env_vars: true
+  cublas_workspace_config: ":4096:8"
 
-# Device selection
-device: auto  # Options: 'auto', 'cuda', 'cpu'
+# ============================================================================
+# Performance Optimization
+# ============================================================================
+performance:
+  # Dataloader optimization
+  persistent_workers: false  # Keep workers alive between epochs
+  
+  # JIT compilation
+  jit_compile: false
+  
+  # Channels last memory format (for CNNs)
+  channels_last: false
+  
+  # TF32 precision (for Ampere+ GPUs)
+  allow_tf32: true
 
-# Gradient clipping max norm (0 to disable)
-gradient_clip_max_norm: 1.0
+# ============================================================================
+# Debugging
+# ============================================================================
+debugging:
+  # Detect anomalies
+  detect_anomaly: false  # Enable for NaN/Inf detection (slow)
+  
+  # Profiling
+  profiling:
+    enabled: false
+    profile_memory: false
+    profile_schedule:
+      wait: 1
+      warmup: 1
+      active: 3
+      repeat: 2
+  
+  # Fast dev run (test with small subset)
+  fast_dev_run: false
+  fast_dev_run_batches: 5
+
+# ============================================================================
+# Experiment Tracking
+# ============================================================================
+experiment:
+  # Experiment name
+  name: null  # Auto-generated if null
+  
+  # Tags
+  tags: []
+  
+  # Notes
+  notes: ""
+  
+  # Save configuration
+  save_config: true
+  
+  # Reproducibility info
+  log_system_info: true
+  log_git_info: true
+
+# ============================================================================
+# Metadata
+# ============================================================================
+metadata:
+  created_by: "RIS Research Team"
+  date_created: "2024-02-01"
+  compatible_versions: ["1.0.0", "1.1.0"]
+  description: |
+    Standard training configuration for RIS beam prediction neural networks.
+    Includes sensible defaults for optimizer, scheduler, regularization,
+    early stopping, and logging.

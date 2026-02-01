@@ -1,58 +1,83 @@
-"""Command-line interface for RIS research engine."""
+"""Command-line interface for RIS Auto-Research Engine."""
 
 import argparse
 import sys
 import json
+import yaml
 from pathlib import Path
+from typing import List, Optional
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.progress import Progress
+    from rich import print as rprint
+    RICH_AVAILABLE = True
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+    Table = None
 
 from ris_research_engine.foundation import (
     SystemConfig, TrainingConfig, ExperimentConfig, ResultTracker
 )
+from ris_research_engine.foundation.logging_config import get_logger
 from ris_research_engine.engine import (
-    ExperimentRunner, SearchController, ResultAnalyzer, ReportGenerator
+    ExperimentRunner, SearchController, 
+    ResultAnalyzer, ReportGenerator
 )
 from ris_research_engine.plugins.probes import list_probes
 from ris_research_engine.plugins.models import list_models
-from ris_research_engine.plugins.data_sources import list_data_sources
 from ris_research_engine.plugins.metrics import list_metrics
 from ris_research_engine.plugins.baselines import AVAILABLE_BASELINES
+
+logger = get_logger(__name__)
+
+
+def print_output(text: str, style: Optional[str] = None):
+    """Print with rich if available, otherwise plain print."""
+    if RICH_AVAILABLE and style:
+        rprint(f"[{style}]{text}[/{style}]")
+    else:
+        print(text)
+
+
+def create_table(title: str, columns: List[str]) -> 'Table':
+    """Create a rich table if available."""
+    if RICH_AVAILABLE:
+        table = Table(title=title)
+        for col in columns:
+            table.add_column(col)
+        return table
+    return None
 
 
 def cmd_run(args):
     """Run a single experiment."""
-    # Compute N_x and N_y from N
-    import math
-    N_x = int(math.sqrt(args.N))
-    N_y = N_x
-    if N_x * N_y != args.N:
-        # Try to find factors
-        for n_x in range(int(math.sqrt(args.N)), 0, -1):
-            if args.N % n_x == 0:
-                N_x = n_x
-                N_y = args.N // n_x
-                break
+    print_output(f"\n🚀 Running experiment: {args.probe} + {args.model}", "bold blue")
     
-    # Create configuration
+    # Create configurations
+    import numpy as np
+    N = args.N
+    N_x = int(np.sqrt(N))
+    N_y = N_x
+    
     system = SystemConfig(
-        N=args.N,
-        N_x=N_x,
-        N_y=N_y,
-        K=args.K,
-        M=args.M,
+        N=N, N_x=N_x, N_y=N_y,
+        K=args.K, M=args.M,
+        frequency=args.frequency * 1e9,
         snr_db=args.snr_db
     )
     
     training = TrainingConfig(
-        max_epochs=args.epochs,
         learning_rate=args.lr,
         batch_size=args.batch_size,
-        early_stopping_patience=args.patience
+        max_epochs=args.epochs
     )
     
-    metrics = args.metrics.split(',') if args.metrics else ['top_1_accuracy', 'power_ratio']
-    
     config = ExperimentConfig(
-        name=args.name or f"{args.probe}_{args.model}_M{args.M}_K{args.K}",
+        name=f"{args.probe}_{args.model}_M{args.M}_K{args.K}",
         system=system,
         training=training,
         probe_type=args.probe,
@@ -61,341 +86,411 @@ def cmd_run(args):
         model_params={},
         data_source=args.data_source,
         data_params={'n_samples': args.n_samples},
-        metrics=metrics,
-        tags=[],
-        notes=args.notes or ''
+        metrics=['top_k_accuracy', 'mean_reciprocal_rank'],
+        tags=['cli']
     )
     
     # Run experiment
-    print(f"Running experiment: {config.name}")
-    runner = ExperimentRunner(args.db)
-    result = runner.run(config)
+    runner = ExperimentRunner()
+    tracker = ResultTracker(args.db)
     
-    # Display results
-    print(f"\nStatus: {result.status}")
-    
-    if result.status == 'completed':
-        print(f"\nMetrics:")
-        for metric_name, metric_value in result.metrics.items():
-            print(f"  {metric_name}: {metric_value:.4f}")
+    try:
+        print_output("Running experiment...", "yellow")
+        result = runner.run(config)
         
-        print(f"\nTraining:")
-        print(f"  Time: {result.training_time_seconds:.2f}s")
-        print(f"  Epochs: {result.total_epochs}")
-        print(f"  Best Epoch: {result.best_epoch}")
-    else:
-        print(f"Error: {result.error_message}")
-    
-    return 0 if result.status == 'completed' else 1
+        # Save to database
+        exp_id = tracker.save_experiment(result)
+        
+        print_output(f"\n✓ Experiment completed - ID: {exp_id}", "bold green")
+        print_output(f"Status: {result.status}", "green")
+        
+        # Display metrics
+        print("\nMetrics:")
+        print("-" * 70)
+        for metric, value in sorted(result.metrics.items()):
+            if isinstance(value, float):
+                print(f"  {metric:30s}: {value:.4f}")
+            else:
+                print(f"  {metric:30s}: {value}")
+        
+        print(f"\nTraining Time: {result.training_time_seconds:.2f}s")
+        print(f"Best Epoch: {result.best_epoch}/{result.total_epochs}")
+        print(f"Model Parameters: {result.model_parameters:,}")
+        
+    except Exception as e:
+        print_output(f"\n✗ Experiment failed: {str(e)}", "bold red")
+        logger.error(f"Experiment failed: {e}", exc_info=True)
+        sys.exit(1)
 
 
 def cmd_search(args):
-    """Run a search campaign from YAML configuration."""
+    """Run search campaign from YAML config."""
+    print_output(f"\n🔍 Running search campaign from: {args.config}", "bold blue")
+    
+    # Load config
     config_path = Path(args.config)
-    
     if not config_path.exists():
-        print(f"Error: Config file not found: {config_path}")
-        return 1
+        print_output(f"✗ Config file not found: {args.config}", "bold red")
+        sys.exit(1)
     
-    print(f"Running search campaign from {config_path}")
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    
+    # Run campaign
     controller = SearchController(args.db)
-    result = controller.run_from_yaml(str(config_path))
+    tracker = ResultTracker(args.db)
     
-    # Display summary
-    print(f"\nCampaign: {result.campaign_name}")
-    print(f"Strategy: {result.search_strategy}")
-    print(f"Total experiments: {result.total_experiments}")
-    print(f"Completed: {result.completed_experiments}")
-    print(f"Failed: {result.failed_experiments}")
-    print(f"Time: {result.total_time_seconds:.2f}s")
-    
-    if result.best_result:
-        print(f"\nBest result:")
-        print(f"  Configuration: {result.best_result.config.name}")
-        print(f"  {result.best_result.primary_metric_name}: {result.best_result.primary_metric_value:.4f}")
-    
-    return 0
+    try:
+        print_output(f"Strategy: {config.get('strategy', 'grid')}", "yellow")
+        print_output("Starting campaign...", "yellow")
+        
+        campaign = controller.run_campaign(
+            search_space_config=config,
+            strategy_name=config.get('strategy', 'grid')
+        )
+        
+        # Save campaign
+        campaign_id = tracker.save_campaign(campaign)
+        
+        print_output(f"\n✓ Campaign completed - ID: {campaign_id}", "bold green")
+        print(f"Campaign: {campaign.campaign_name}")
+        print(f"Total Experiments: {campaign.total_experiments}")
+        print(f"Completed: {campaign.completed_experiments}")
+        print(f"Pruned: {campaign.pruned_experiments}")
+        print(f"Failed: {campaign.failed_experiments}")
+        print(f"Total Time: {campaign.total_time_seconds:.2f}s")
+        
+        if campaign.best_result:
+            print(f"\nBest Result:")
+            print(f"  Config: {campaign.best_result.config.name}")
+            print(f"  Metric: {campaign.best_result.primary_metric_value:.4f}")
+        
+    except Exception as e:
+        print_output(f"\n✗ Campaign failed: {str(e)}", "bold red")
+        logger.error(f"Campaign failed: {e}", exc_info=True)
+        sys.exit(1)
 
 
 def cmd_validate(args):
-    """Run cross-fidelity validation."""
-    print(f"Running cross-fidelity validation (top {args.top_n} experiments)")
+    """Cross-fidelity validation."""
+    print_output(f"\n✓ Validating campaign: {args.campaign}", "bold blue")
+    print_output(f"HDF5 data: {args.hdf5}", "blue")
     
-    controller = SearchController(args.db)
-    results = controller.run_cross_fidelity_validation(
-        top_n=args.top_n,
-        validation_fidelity=args.fidelity,
-        validation_data_params={}
-    )
+    tracker = ResultTracker(args.db)
     
-    print(f"\nValidation completed for {len(results)} experiments")
+    # Get campaign - query database directly
+    import sqlite3
+    try:
+        conn = sqlite3.connect(args.db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM campaigns WHERE name = ?", (args.campaign,))
+        row = cursor.fetchone()
+        campaign = dict(row) if row else None
+        conn.close()
+    except sqlite3.Error:
+        campaign = None
     
-    for i, result in enumerate(results):
-        if result.status == 'completed':
-            print(f"{i+1}. {result.config.name}: {result.primary_metric_name}={result.primary_metric_value:.4f}")
+    if not campaign:
+        print_output(f"✗ Campaign not found: {args.campaign}", "bold red")
+        sys.exit(1)
     
-    return 0
+    # Get top experiments
+    experiments = tracker.get_all_experiments(campaign_name=args.campaign)
+    experiments = sorted(
+        experiments,
+        key=lambda x: x.get('primary_metric_value', 0),
+        reverse=True
+    )[:args.top_n]
+    
+    print(f"\nValidating top {args.top_n} experiments:")
+    print("-" * 70)
+    
+    for i, exp in enumerate(experiments, 1):
+        print(f"{i}. {exp['name']}")
+        print(f"   Synthetic Top-1: {exp['metrics'].get('top_1_accuracy', 0):.4f}")
+        # TODO: Implement actual Sionna validation
+        print(f"   Sionna Top-1: (not implemented)")
+    
+    print_output("\n✓ Validation placeholder complete", "green")
 
 
 def cmd_list(args):
-    """List experiments from database."""
+    """List experiments with filtering."""
     tracker = ResultTracker(args.db)
-    results = tracker.get_all_results()
     
-    if not results:
-        print("No experiments found.")
-        return 0
+    # Get experiments
+    experiments = tracker.get_all_experiments(
+        campaign_name=args.campaign if args.campaign else None,
+        status=args.status if args.status != 'all' else None,
+        limit=args.limit
+    )
     
-    # Apply filters
-    if args.status:
-        results = [r for r in results if r.status == args.status]
+    if not experiments:
+        print_output("No experiments found", "yellow")
+        return
     
-    if args.probe:
-        results = [r for r in results if r.config.probe_type == args.probe]
+    # Display table
+    print_output(f"\n📊 Found {len(experiments)} experiments:", "bold blue")
     
-    if args.model:
-        results = [r for r in results if r.config.model_type == args.model]
-    
-    # Sort by timestamp
-    results.sort(key=lambda r: r.timestamp, reverse=True)
-    
-    # Limit results
-    if args.limit:
-        results = results[:args.limit]
-    
-    # Display results
-    print(f"\nFound {len(results)} experiments\n")
-    print(f"{'ID':<6} {'Name':<30} {'Status':<12} {'Probe':<15} {'Model':<10} {'Metric':<8}")
-    print(f"{'-'*85}")
-    
-    for i, result in enumerate(results):
-        name = result.config.name[:28] + '..' if len(result.config.name) > 30 else result.config.name
-        primary_value = f"{result.primary_metric_value:.3f}" if result.status == 'completed' else "N/A"
+    if RICH_AVAILABLE and console:
+        table = Table(title="Experiments")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="white")
+        table.add_column("Probe", style="green")
+        table.add_column("Model", style="blue")
+        table.add_column("M", style="yellow")
+        table.add_column("K", style="yellow")
+        table.add_column("Top-1", style="magenta")
+        table.add_column("Status", style="white")
         
-        print(f"{i:<6} {name:<30} {result.status:<12} {result.config.probe_type:<15} "
-              f"{result.config.model_type:<10} {primary_value:<8}")
-    
-    return 0
+        for exp in experiments:
+            table.add_row(
+                str(exp['id']),
+                exp['name'][:30],
+                exp['probe_type'],
+                exp['model_type'],
+                str(exp['M']),
+                str(exp['K']),
+                f"{exp['metrics'].get('top_1_accuracy', 0):.3f}",
+                exp['status']
+            )
+        
+        console.print(table)
+    else:
+        print("-" * 100)
+        print(f"{'ID':<5} {'Name':<30} {'Probe':<15} {'Model':<12} {'M':<4} {'K':<5} {'Top-1':<8} {'Status':<10}")
+        print("-" * 100)
+        
+        for exp in experiments:
+            print(f"{exp['id']:<5} {exp['name'][:30]:<30} {exp['probe_type']:<15} "
+                  f"{exp['model_type']:<12} {exp['M']:<4} {exp['K']:<5} "
+                  f"{exp['metrics'].get('top_1_accuracy', 0):<8.3f} {exp['status']:<10}")
 
 
 def cmd_compare(args):
-    """Compare specific experiments."""
+    """Compare experiment IDs."""
+    print_output(f"\n📈 Comparing {len(args.ids)} experiments", "bold blue")
+    
     tracker = ResultTracker(args.db)
-    results = tracker.get_all_results()
+    analyzer = ResultAnalyzer(args.db)
     
-    # Get experiments by IDs
-    experiment_ids = [int(x) for x in args.ids.split(',')]
-    selected_results = []
+    # Get comparison
+    df = analyzer.compare_probes(args.ids)
     
-    for exp_id in experiment_ids:
-        if exp_id < len(results):
-            selected_results.append(results[exp_id])
-        else:
-            print(f"Warning: Experiment ID {exp_id} not found")
+    if df.empty:
+        print_output("No data to compare", "yellow")
+        return
     
-    if not selected_results:
-        print("No valid experiments to compare")
-        return 1
+    print("\n" + df.to_string(index=False))
     
-    # Display comparison
-    print(f"\nComparing {len(selected_results)} experiments\n")
-    
-    metric = args.metric or 'top_1_accuracy'
-    
-    print(f"{'Name':<30} {'Probe':<15} {'Model':<10} {metric:<12}")
-    print(f"{'-'*70}")
-    
-    for result in selected_results:
-        name = result.config.name[:28] + '..' if len(result.config.name) > 30 else result.config.name
-        value = f"{result.metrics.get(metric, 0.0):.4f}" if result.status == 'completed' else "N/A"
-        
-        print(f"{name:<30} {result.config.probe_type:<15} {result.config.model_type:<10} {value:<12}")
-    
-    return 0
+    print_output(f"\n✓ Comparison complete", "green")
 
 
 def cmd_plot(args):
-    """Generate a plot."""
-    reporter = ReportGenerator(args.db)
+    """Generate specific plot type."""
+    print_output(f"\n📊 Generating {args.type} plot", "bold blue")
     
-    plot_type = args.type
-    metric = args.metric or 'top_1_accuracy'
+    reporter = ReportGenerator(args.output_dir or "plots")
     
-    if plot_type == 'probe_comparison':
-        path = reporter.probe_comparison_bar(metric)
-    elif plot_type == 'model_comparison':
-        path = reporter.model_comparison_bar(metric)
-    elif plot_type == 'sparsity':
-        path = reporter.sparsity_curve(metric)
-    elif plot_type == 'heatmap':
-        path = reporter.heatmap_probe_model(metric)
-    elif plot_type == 'pareto':
-        metric_x = args.metric_x or 'training_time'
-        metric_y = args.metric_y or 'top_1_accuracy'
-        path = reporter.pareto_front(metric_x, metric_y)
+    if args.type == 'probe_comparison':
+        reporter.probe_comparison_bar(args.ids, metric=args.metric or 'top_1_accuracy')
+        print_output(f"✓ Plot saved to {reporter.output_dir}", "green")
+        
+    elif args.type == 'training_curves':
+        reporter.training_curves(args.ids[0] if args.ids else None)
+        print_output(f"✓ Plot saved to {reporter.output_dir}", "green")
+        
     else:
-        print(f"Unknown plot type: {plot_type}")
-        print("Available types: probe_comparison, model_comparison, sparsity, heatmap, pareto")
-        return 1
-    
-    if path:
-        print(f"Plot saved to: {path}")
-        return 0
-    else:
-        print("Failed to generate plot")
-        return 1
+        print_output(f"✗ Unknown plot type: {args.type}", "red")
+        sys.exit(1)
 
 
 def cmd_export(args):
-    """Export experiment data."""
-    analyzer = ResultAnalyzer(args.db)
-    df = analyzer.get_results_dataframe({'status': 'completed'})
+    """Export to CSV/JSON."""
+    print_output(f"\n💾 Exporting to {args.format.upper()}", "bold blue")
     
-    if df.empty:
-        print("No completed experiments to export")
-        return 1
+    tracker = ResultTracker(args.db)
+    
+    # Get experiments
+    experiments = tracker.get_all_experiments(
+        campaign_name=args.campaign if args.campaign else None,
+        limit=1000
+    )
     
     output_path = Path(args.output)
     
     if args.format == 'csv':
+        import pandas as pd
+        
+        data = []
+        for exp in experiments:
+            row = {
+                'id': exp['id'],
+                'name': exp['name'],
+                'probe': exp['probe_type'],
+                'model': exp['model_type'],
+                'M': exp['M'],
+                'K': exp['K'],
+                'status': exp['status'],
+                'timestamp': exp['timestamp']
+            }
+            row.update(exp['metrics'])
+            data.append(row)
+        
+        df = pd.DataFrame(data)
         df.to_csv(output_path, index=False)
+        
     elif args.format == 'json':
-        df.to_json(output_path, orient='records', indent=2)
-    else:
-        print(f"Unknown format: {args.format}")
-        return 1
+        with open(output_path, 'w') as f:
+            json.dump(experiments, f, indent=2)
     
-    print(f"Exported {len(df)} experiments to {output_path}")
-    return 0
+    print_output(f"✓ Exported {len(experiments)} experiments to {output_path}", "green")
 
 
 def cmd_plugins(args):
     """List available plugins."""
-    print("\nAvailable Plugins\n")
-    print("=" * 60)
+    print_output("\n🔌 Available Plugins", "bold blue")
     
-    print("\nProbes:")
-    for probe in list_probes():
-        print(f"  - {probe}")
+    if args.type in ['probes', 'all']:
+        print("\nProbes:")
+        print("-" * 50)
+        for probe in list_probes():
+            print(f"  • {probe}")
     
-    print("\nModels:")
-    for model in list_models():
-        print(f"  - {model}")
+    if args.type in ['models', 'all']:
+        print("\nModels:")
+        print("-" * 50)
+        for model in list_models():
+            print(f"  • {model}")
     
-    print("\nData Sources:")
-    for source in list_data_sources():
-        print(f"  - {source}")
+    if args.type in ['metrics', 'all']:
+        print("\nMetrics:")
+        print("-" * 50)
+        for metric in list_metrics():
+            print(f"  • {metric}")
     
-    print("\nMetrics:")
-    for metric in list_metrics():
-        print(f"  - {metric}")
-    
-    print("\nBaselines:")
-    for baseline in AVAILABLE_BASELINES.keys():
-        print(f"  - {baseline}")
-    
-    print("")
-    
-    return 0
+    if args.type in ['baselines', 'all']:
+        print("\nBaselines:")
+        print("-" * 50)
+        for baseline in AVAILABLE_BASELINES:
+            print(f"  • {baseline}")
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="RIS Research Engine - Command Line Interface"
+        description='RIS Auto-Research Engine CLI',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run single experiment
+  ris-cli run --probe dft_beams --model mlp --M 8 --K 64
+  
+  # Run search campaign
+  ris-cli search --config configs/grid_search.yaml
+  
+  # List experiments
+  ris-cli list --limit 20
+  
+  # Compare experiments
+  ris-cli compare --ids 1 2 3
+  
+  # Export results
+  ris-cli export --campaign my_campaign --output results.csv --format csv
+  
+  # List available plugins
+  ris-cli plugins --type all
+        """
     )
     
-    parser.add_argument(
-        '--db',
-        default='ris_results.db',
-        help='Path to SQLite database (default: ris_results.db)'
-    )
+    parser.add_argument('--db', default='results.db', 
+                       help='Database path (default: results.db)')
     
-    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
     
     # Run command
-    run_parser = subparsers.add_parser('run', help='Run a single experiment')
-    run_parser.add_argument('--probe', required=True, help='Probe type')
-    run_parser.add_argument('--model', required=True, help='Model type')
-    run_parser.add_argument('--N', type=int, default=64, help='Number of RIS elements')
-    run_parser.add_argument('--K', type=int, default=64, help='Codebook size')
-    run_parser.add_argument('--M', type=int, default=8, help='Sensing budget')
-    run_parser.add_argument('--data-source', default='synthetic_rayleigh', help='Data source')
-    run_parser.add_argument('--n-samples', type=int, default=1000, help='Number of training samples')
-    run_parser.add_argument('--metrics', help='Comma-separated metric names')
-    run_parser.add_argument('--epochs', type=int, default=50, help='Max epochs')
-    run_parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    run_parser.add_argument('--batch-size', type=int, default=64, help='Batch size')
-    run_parser.add_argument('--patience', type=int, default=15, help='Early stopping patience')
-    run_parser.add_argument('--snr-db', type=float, default=20.0, help='SNR in dB')
-    run_parser.add_argument('--name', help='Experiment name')
-    run_parser.add_argument('--notes', help='Experiment notes')
+    parser_run = subparsers.add_parser('run', help='Run single experiment')
+    parser_run.add_argument('--probe', required=True, help='Probe type')
+    parser_run.add_argument('--model', required=True, help='Model type')
+    parser_run.add_argument('--M', type=int, required=True, help='Sensing budget')
+    parser_run.add_argument('--K', type=int, required=True, help='Codebook size')
+    parser_run.add_argument('--N', type=int, default=64, help='Number of RIS elements')
+    parser_run.add_argument('--epochs', type=int, default=100, help='Training epochs')
+    parser_run.add_argument('--data-source', default='synthetic_rayleigh', 
+                           help='Data source')
+    parser_run.add_argument('--n-samples', type=int, default=1000, 
+                           help='Number of samples')
+    parser_run.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
+    parser_run.add_argument('--batch-size', type=int, default=64, help='Batch size')
+    parser_run.add_argument('--frequency', type=float, default=28.0, 
+                           help='Frequency in GHz')
+    parser_run.add_argument('--snr-db', type=float, default=20.0, help='SNR in dB')
+    parser_run.set_defaults(func=cmd_run)
     
     # Search command
-    search_parser = subparsers.add_parser('search', help='Run search campaign from YAML')
-    search_parser.add_argument('--config', required=True, help='Path to YAML config file')
+    parser_search = subparsers.add_parser('search', help='Run search campaign')
+    parser_search.add_argument('--config', required=True, help='Path to YAML config')
+    parser_search.set_defaults(func=cmd_search)
     
     # Validate command
-    validate_parser = subparsers.add_parser('validate', help='Run cross-fidelity validation')
-    validate_parser.add_argument('--top-n', type=int, default=10, help='Number of top experiments to validate')
-    validate_parser.add_argument('--fidelity', default='sionna', help='Target fidelity level')
+    parser_validate = subparsers.add_parser('validate', 
+                                           help='Cross-fidelity validation')
+    parser_validate.add_argument('--campaign', required=True, help='Campaign name')
+    parser_validate.add_argument('--hdf5', required=True, help='HDF5 file path')
+    parser_validate.add_argument('--top-n', type=int, default=3, 
+                                help='Number of top experiments')
+    parser_validate.set_defaults(func=cmd_validate)
     
     # List command
-    list_parser = subparsers.add_parser('list', help='List experiments')
-    list_parser.add_argument('--status', help='Filter by status')
-    list_parser.add_argument('--probe', help='Filter by probe type')
-    list_parser.add_argument('--model', help='Filter by model type')
-    list_parser.add_argument('--limit', type=int, help='Limit number of results')
+    parser_list = subparsers.add_parser('list', help='List experiments')
+    parser_list.add_argument('--campaign', help='Filter by campaign')
+    parser_list.add_argument('--status', choices=['all', 'completed', 'failed', 'pruned'],
+                            default='all', help='Filter by status')
+    parser_list.add_argument('--limit', type=int, default=20, help='Max results')
+    parser_list.set_defaults(func=cmd_list)
     
     # Compare command
-    compare_parser = subparsers.add_parser('compare', help='Compare experiments by IDs')
-    compare_parser.add_argument('--ids', required=True, help='Comma-separated experiment IDs')
-    compare_parser.add_argument('--metric', help='Metric to compare')
+    parser_compare = subparsers.add_parser('compare', help='Compare experiments')
+    parser_compare.add_argument('--ids', type=int, nargs='+', required=True,
+                               help='Experiment IDs to compare')
+    parser_compare.set_defaults(func=cmd_compare)
     
     # Plot command
-    plot_parser = subparsers.add_parser('plot', help='Generate plot')
-    plot_parser.add_argument('--type', required=True, 
-                            help='Plot type (probe_comparison, model_comparison, sparsity, heatmap, pareto)')
-    plot_parser.add_argument('--metric', help='Primary metric')
-    plot_parser.add_argument('--metric-x', help='X-axis metric (for pareto)')
-    plot_parser.add_argument('--metric-y', help='Y-axis metric (for pareto)')
+    parser_plot = subparsers.add_parser('plot', help='Generate plots')
+    parser_plot.add_argument('--type', required=True,
+                            choices=['probe_comparison', 'training_curves'],
+                            help='Plot type')
+    parser_plot.add_argument('--ids', type=int, nargs='+', help='Experiment IDs')
+    parser_plot.add_argument('--metric', default='top_1_accuracy', help='Metric to plot')
+    parser_plot.add_argument('--output-dir', help='Output directory')
+    parser_plot.set_defaults(func=cmd_plot)
     
     # Export command
-    export_parser = subparsers.add_parser('export', help='Export experiment data')
-    export_parser.add_argument('--output', required=True, help='Output file path')
-    export_parser.add_argument('--format', choices=['csv', 'json'], default='csv', help='Output format')
+    parser_export = subparsers.add_parser('export', help='Export results')
+    parser_export.add_argument('--campaign', help='Campaign name')
+    parser_export.add_argument('--output', required=True, help='Output file path')
+    parser_export.add_argument('--format', choices=['csv', 'json'], required=True,
+                              help='Export format')
+    parser_export.set_defaults(func=cmd_export)
     
     # Plugins command
-    subparsers.add_parser('plugins', help='List available plugins')
+    parser_plugins = subparsers.add_parser('plugins', help='List available plugins')
+    parser_plugins.add_argument('--type', 
+                               choices=['probes', 'models', 'metrics', 'baselines', 'all'],
+                               default='all', help='Plugin type')
+    parser_plugins.set_defaults(func=cmd_plugins)
     
-    # Parse arguments
+    # Parse and execute
     args = parser.parse_args()
     
     if not args.command:
         parser.print_help()
-        return 1
+        sys.exit(1)
     
     # Execute command
-    if args.command == 'run':
-        return cmd_run(args)
-    elif args.command == 'search':
-        return cmd_search(args)
-    elif args.command == 'validate':
-        return cmd_validate(args)
-    elif args.command == 'list':
-        return cmd_list(args)
-    elif args.command == 'compare':
-        return cmd_compare(args)
-    elif args.command == 'plot':
-        return cmd_plot(args)
-    elif args.command == 'export':
-        return cmd_export(args)
-    elif args.command == 'plugins':
-        return cmd_plugins(args)
-    else:
-        print(f"Unknown command: {args.command}")
-        return 1
+    args.func(args)
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()

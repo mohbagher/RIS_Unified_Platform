@@ -1,45 +1,76 @@
-# Quick Test Search Space - Fast validation configuration
-# Use this for quick testing of the system with minimal resources
+# ============================================================================
+# Quick Test Search Space
+# ============================================================================
+# Minimal configuration for fast validation and debugging.
+# Useful for:
+# - Testing pipeline before large experiments
+# - Quick sanity checks
+# - Development and debugging
+# - CI/CD validation
+#
+# Total Experiments: 2
+# Expected Runtime: ~2-3 minutes on CPU
+# ============================================================================
 
-campaign_name: "Quick Test"
-search_strategy: "grid_search"
+name: "quick_test"
+description: "Fast validation configuration for testing and debugging"
+strategy: "grid_search"
 
-search_space:
-  # System configuration
-  system:
-    N: [16]  # Small RIS array for fast testing
-    K: [16]  # Small codebook
-    M: [4]   # Minimal sensing budget
-    snr_db: [20.0]
-  
-  # Probe types to test
-  probe_types:
-    - random_uniform
-    - hadamard
-  
-  # Model types to test
-  model_types:
-    - mlp
-  
-  # Data configuration
-  data_source: synthetic_rayleigh
-  data_params:
-    n_samples: 500  # Small dataset for speed
-  
-  # Training configuration
-  training:
-    max_epochs: 10
-    batch_size: 32
-    learning_rate: 0.001
-    early_stopping_patience: 5
-  
-  # Metrics to evaluate
-  metrics:
-    - top_1_accuracy
-    - power_ratio
+# Small system for speed
+system:
+  N: 16   # Reduced from 64
+  K: 16   # Reduced from 64
+  M: 4    # Reduced from 8
+  frequency: 28e9
+  snr_db: 20.0
 
-# Strategy parameters
-strategy_params:
-  # For grid search, all combinations will be tried
-  # This should result in 2 experiments (2 probes × 1 model)
-  pass
+# Minimal probe comparison
+probes:
+  type:
+    - "hadamard"        # Expected best
+    - "random_uniform"  # Baseline
+
+# Simple model
+model:
+  type: "mlp"
+  hidden_dims: [64, 32]  # Small architecture
+  activation: "relu"
+  dropout: 0.1
+
+# Fast training
+training:
+  learning_rate: 0.001
+  batch_size: 32
+  max_epochs: 10  # Just 10 epochs
+  early_stopping_patience: 5
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  val_split: 0.15
+  test_split: 0.15
+
+# Minimal data
+data:
+  num_samples: 100  # Very small dataset
+  data_source: "synthetic"
+
+# Single seed for speed
+random_seeds: [42]
+
+# Basic metrics
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "val_loss"
+    - "training_time"
+
+# Minimal rules
+rules:
+  early_stopping: false  # Disabled for quick test
+  abandon_threshold: 0.0  # Never abandon in test mode
+  min_epochs: 1
+
+# Output
+output:
+  verbose: true
+  save_models: false  # Don't save to save disk space
+  save_logs: true

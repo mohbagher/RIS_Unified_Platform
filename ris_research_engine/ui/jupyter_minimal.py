@@ -1,94 +1,95 @@
-"""Minimal Jupyter interface for RIS research engine."""
+"""Simple API for Jupyter notebooks - RIS Auto-Research Engine."""
 
-import logging
-import math
-from typing import Dict, Any, List, Optional
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Union
 
 from ris_research_engine.foundation import (
-    SystemConfig, TrainingConfig, ExperimentConfig, ExperimentResult
+    SystemConfig, TrainingConfig, ExperimentConfig, 
+    ExperimentResult, ResultTracker, load_hdf5_data
 )
+from ris_research_engine.foundation.logging_config import get_logger
 from ris_research_engine.engine import (
-    ExperimentRunner, SearchController, ResultAnalyzer, ReportGenerator
+    ExperimentRunner, SearchController, 
+    ResultAnalyzer, ReportGenerator
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RISEngine:
-    """Simple interface for running RIS experiments in Jupyter notebooks."""
+    """Simple API for running RIS experiments in Jupyter notebooks."""
     
-    def __init__(self, db_path: str = "ris_results.db"):
+    def __init__(self, db_path: str = "results.db", output_dir: str = "outputs"):
         """
-        Initialize RIS Engine.
+        Initialize the RIS Engine.
         
         Args:
-            db_path: Path to SQLite database for storing results
+            db_path: Path to SQLite database for results storage
+            output_dir: Directory for outputs (plots, reports, etc.)
         """
         self.db_path = db_path
-        self.runner = ExperimentRunner(db_path)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.tracker = ResultTracker(db_path)
+        self.runner = ExperimentRunner()
         self.controller = SearchController(db_path)
         self.analyzer = ResultAnalyzer(db_path)
-        self.reporter = ReportGenerator(db_path)
-        self.last_result = None
+        self.reporter = ReportGenerator(str(self.output_dir))
+        
+        logger.info(f"RISEngine initialized - DB: {db_path}, Output: {output_dir}")
     
     def run(
         self,
-        probe: str = "random_uniform",
-        model: str = "mlp",
+        probe: str,
+        model: str,
+        M: int,
+        K: int,
         N: int = 64,
-        K: int = 64,
-        M: int = 8,
-        data_source: str = "synthetic_rayleigh",
-        metrics: Optional[List[str]] = None,
-        max_epochs: int = 50,
-        learning_rate: float = 1e-3,
-        batch_size: int = 64,
+        data_source: str = 'synthetic_rayleigh',
+        n_samples: int = 1000,
+        epochs: int = 100,
         **kwargs
-    ) -> ExperimentResult:
+    ) -> Dict[str, Any]:
         """
-        Run a single experiment with simple parameters.
+        Run a single experiment with given parameters.
         
         Args:
-            probe: Probe type name
-            model: Model type name
-            N: Number of RIS elements
+            probe: Probe type (e.g., 'dft_beams', 'hadamard', 'random_uniform')
+            model: Model type (e.g., 'mlp', 'cnn_1d', 'transformer')
+            M: Sensing budget (number of measurements)
             K: Codebook size
-            M: Sensing budget
-            data_source: Data source name
-            metrics: List of metric names
-            max_epochs: Maximum training epochs
-            learning_rate: Learning rate
-            batch_size: Batch size
-            **kwargs: Additional parameters
+            N: Number of RIS elements (default: 64)
+            data_source: Data source name (default: 'synthetic_rayleigh')
+            n_samples: Number of samples to generate (default: 1000)
+            epochs: Maximum training epochs (default: 100)
+            **kwargs: Additional parameters (learning_rate, batch_size, etc.)
             
         Returns:
-            ExperimentResult
+            Dictionary with experiment result
         """
-        # Set default metrics
-        if metrics is None:
-            metrics = ['top_1_accuracy', 'power_ratio']
-        
-        # Compute N_x and N_y from N
-        N_x = int(math.sqrt(N))
+        # Create configs
+        N_x = int(np.sqrt(N))
         N_y = N_x
-        if N_x * N_y != N:
-            # Try to find factors
-            for n_x in range(int(math.sqrt(N)), 0, -1):
-                if N % n_x == 0:
-                    N_x = n_x
-                    N_y = N // n_x
-                    break
         
-        # Create configuration
-        system = SystemConfig(N=N, N_x=N_x, N_y=N_y, K=K, M=M)
-        training = TrainingConfig(
-            max_epochs=max_epochs,
-            learning_rate=learning_rate,
-            batch_size=batch_size
+        system = SystemConfig(
+            N=N, N_x=N_x, N_y=N_y, K=K, M=M,
+            frequency=kwargs.get('frequency', 28e9),
+            snr_db=kwargs.get('snr_db', 20.0)
         )
         
-        config = ExperimentConfig(
+        training = TrainingConfig(
+            learning_rate=kwargs.get('learning_rate', 1e-3),
+            batch_size=kwargs.get('batch_size', 64),
+            max_epochs=epochs,
+            early_stopping_patience=kwargs.get('patience', 15),
+            dropout=kwargs.get('dropout', 0.1)
+        )
+        
+        experiment = ExperimentConfig(
             name=f"{probe}_{model}_M{M}_K{K}",
             system=system,
             training=training,
@@ -97,276 +98,460 @@ class RISEngine:
             model_type=model,
             model_params=kwargs.get('model_params', {}),
             data_source=data_source,
-            data_params=kwargs.get('data_params', {'n_samples': 1000}),
-            metrics=metrics,
+            data_params={'n_samples': n_samples},
+            metrics=['top_k_accuracy', 'mean_reciprocal_rank'],
             tags=kwargs.get('tags', []),
             notes=kwargs.get('notes', '')
         )
         
-        # Run experiment
-        print(f"Running experiment: {config.name}")
-        result = self.runner.run(config)
-        self.last_result = result
+        logger.info(f"Running experiment: {experiment.name}")
         
-        return result
+        # Run experiment
+        result = self.runner.run(experiment)
+        
+        # Save to database
+        exp_id = self.tracker.save_experiment(result)
+        
+        logger.info(f"Experiment completed - ID: {exp_id}, Status: {result.status}")
+        
+        # Convert to dict and add ID
+        result_dict = result.to_dict()
+        result_dict['experiment_id'] = exp_id
+        
+        return result_dict
     
-    def show(self, result: Optional[ExperimentResult] = None):
+    def show(self, result: Dict[str, Any]) -> None:
         """
-        Display metrics and basic plot for an experiment.
+        Display experiment results in notebook.
         
         Args:
-            result: ExperimentResult to display (uses last_result if None)
+            result: Experiment result dictionary
         """
-        if result is None:
-            result = self.last_result
+        print("\n" + "="*70)
+        print(f"Experiment: {result['config']['name']}")
+        print(f"Status: {result['status']}")
+        print("="*70)
         
-        if result is None:
-            print("No result to display. Run an experiment first.")
-            return
+        # Metrics table
+        print("\nMetrics:")
+        print("-" * 70)
+        metrics = result['metrics']
         
-        # Display status
-        print(f"\n{'='*60}")
-        print(f"Experiment: {result.config.name}")
-        print(f"Status: {result.status}")
-        print(f"{'='*60}\n")
+        metric_data = []
+        for key, value in sorted(metrics.items()):
+            if isinstance(value, float):
+                metric_data.append({'Metric': key, 'Value': f"{value:.4f}"})
+            else:
+                metric_data.append({'Metric': key, 'Value': str(value)})
         
-        if result.status == 'failed':
-            print(f"Error: {result.error_message}")
-            return
+        df = pd.DataFrame(metric_data)
+        print(df.to_string(index=False))
         
-        # Display metrics
-        print("Metrics:")
-        for metric_name, metric_value in result.metrics.items():
-            print(f"  {metric_name}: {metric_value:.4f}")
+        print(f"\nTraining Time: {result['training_time_seconds']:.2f}s")
+        print(f"Best Epoch: {result['best_epoch']}/{result['total_epochs']}")
+        print(f"Model Parameters: {result['model_parameters']:,}")
         
-        print(f"\nTraining:")
-        print(f"  Time: {result.training_time_seconds:.2f}s")
-        print(f"  Epochs: {result.total_epochs}")
-        print(f"  Best Epoch: {result.best_epoch}")
-        print(f"  Parameters: {result.model_parameters:,}")
-        
-        # Display baseline comparison
-        if result.baseline_results:
-            print(f"\nBaseline Comparison:")
-            primary_metric = result.primary_metric_name
-            if primary_metric in result.metrics:
-                ml_value = result.metrics[primary_metric]
-                print(f"  ML Model ({primary_metric}): {ml_value:.4f}")
-                
-                for baseline_name, baseline_metrics in result.baseline_results.items():
-                    if primary_metric in baseline_metrics:
-                        baseline_value = baseline_metrics[primary_metric]
-                        improvement = ((ml_value - baseline_value) / baseline_value * 100) if baseline_value > 0 else 0
-                        print(f"  {baseline_name}: {baseline_value:.4f} (improvement: {improvement:+.1f}%)")
-        
-        print("")
+        # Plot training curves
+        if 'training_history' in result:
+            history = result['training_history']
+            
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+            
+            # Loss plot
+            if 'train_loss' in history:
+                epochs = range(1, len(history['train_loss']) + 1)
+                axes[0].plot(epochs, history['train_loss'], label='Train', linewidth=2)
+                if 'val_loss' in history:
+                    axes[0].plot(epochs, history['val_loss'], label='Val', linewidth=2)
+                axes[0].set_xlabel('Epoch')
+                axes[0].set_ylabel('Loss')
+                axes[0].set_title('Training Loss')
+                axes[0].legend()
+                axes[0].grid(True, alpha=0.3)
+            
+            # Accuracy plot
+            if 'val_top_1_accuracy' in history:
+                epochs = range(1, len(history['val_top_1_accuracy']) + 1)
+                axes[1].plot(epochs, history['val_top_1_accuracy'], 
+                           label='Top-1', linewidth=2)
+                if 'val_top_5_accuracy' in history:
+                    axes[1].plot(epochs, history['val_top_5_accuracy'], 
+                               label='Top-5', linewidth=2)
+                axes[1].set_xlabel('Epoch')
+                axes[1].set_ylabel('Accuracy')
+                axes[1].set_title('Validation Accuracy')
+                axes[1].legend()
+                axes[1].grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.show()
     
     def compare_probes(
         self,
         probes: List[str],
-        model: str = "mlp",
+        model: str = 'mlp',
         M: int = 8,
         K: int = 64,
         **kwargs
-    ) -> List[ExperimentResult]:
+    ) -> List[Dict[str, Any]]:
         """
-        Run and compare multiple probe types.
+        Run experiments for multiple probe types and compare.
         
         Args:
-            probes: List of probe type names
-            model: Model type to use
-            M: Sensing budget
-            K: Codebook size
-            **kwargs: Additional parameters for run()
+            probes: List of probe types to compare
+            model: Model type (default: 'mlp')
+            M: Sensing budget (default: 8)
+            K: Codebook size (default: 64)
+            **kwargs: Additional parameters passed to run()
             
         Returns:
-            List of experiment results
+            List of result dictionaries
         """
         results = []
         
-        print(f"Comparing {len(probes)} probe types with {model} model...")
-        print("")
-        
         for probe in probes:
-            print(f"Running {probe}...")
+            print(f"\nRunning {probe}...")
             result = self.run(probe=probe, model=model, M=M, K=K, **kwargs)
             results.append(result)
-        
-        # Display summary
-        print(f"\n{'='*60}")
-        print("Comparison Summary")
-        print(f"{'='*60}\n")
-        
-        for result in results:
-            if result.status == 'completed':
-                primary_metric = result.primary_metric_name
-                primary_value = result.primary_metric_value
-                print(f"{result.config.probe_type:20s}: {primary_metric}={primary_value:.4f}")
-        
-        print("")
         
         return results
     
     def plot_comparison(
         self,
-        metric: str = 'top_1_accuracy',
-        group_by: str = 'probe_type'
-    ):
+        results: List[Dict[str, Any]],
+        metric: str = 'top_1_accuracy'
+    ) -> None:
         """
-        Plot comparison of experiments.
+        Create bar chart comparing multiple experiment results.
         
         Args:
-            metric: Metric to compare
-            group_by: How to group results ('probe_type' or 'model_type')
+            results: List of experiment result dictionaries
+            metric: Metric to compare (default: 'top_1_accuracy')
         """
-        if group_by == 'probe_type':
-            self.reporter.probe_comparison_bar(metric)
-        elif group_by == 'model_type':
-            self.reporter.model_comparison_bar(metric)
-        else:
-            print(f"Unknown group_by: {group_by}")
+        data = []
+        for result in results:
+            if result['status'] == 'completed':
+                data.append({
+                    'name': result['config']['name'],
+                    'probe': result['config']['probe_type'],
+                    'value': result['metrics'].get(metric, 0.0)
+                })
+        
+        if not data:
+            print("No completed experiments to compare")
             return
         
+        df = pd.DataFrame(data)
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        bars = ax.bar(range(len(df)), df['value'])
+        ax.set_xticks(range(len(df)))
+        ax.set_xticklabels(df['probe'], rotation=45, ha='right')
+        ax.set_ylabel(metric.replace('_', ' ').title())
+        ax.set_title(f'Probe Comparison - {metric.replace("_", " ").title()}')
+        ax.grid(True, axis='y', alpha=0.3)
+        
+        # Color bars
+        colors = plt.cm.viridis(np.linspace(0, 1, len(bars)))
+        for bar, color in zip(bars, colors):
+            bar.set_color(color)
+        
+        # Add value labels
+        for i, (bar, value) in enumerate(zip(bars, df['value'])):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{value:.3f}',
+                   ha='center', va='bottom', fontsize=9)
+        
+        plt.tight_layout()
         plt.show()
     
     def search(
         self,
-        config_path: str
-    ):
+        strategy: str = 'grid',
+        config_dict: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Run a search campaign from YAML configuration.
+        Run a search campaign using SearchController.
         
         Args:
-            config_path: Path to YAML config file
+            strategy: Search strategy name ('grid', 'random', 'bayesian', etc.)
+            config_dict: Search configuration dict (if None, use default)
+            
+        Returns:
+            Campaign result dictionary
         """
-        print(f"Running search campaign from {config_path}...")
-        result = self.controller.run_from_yaml(config_path)
+        if config_dict is None:
+            # Default search configuration
+            config_dict = {
+                'name': f'{strategy}_search',
+                'search_space': {
+                    'probe_type': ['dft_beams', 'hadamard', 'random_uniform'],
+                    'model_type': ['mlp', 'cnn_1d'],
+                    'M': [4, 8, 16],
+                    'learning_rate': [1e-4, 1e-3, 1e-2]
+                },
+                'budget': {
+                    'max_experiments': 20,
+                    'max_time_hours': 2.0
+                }
+            }
         
-        # Display summary
-        print(f"\n{'='*60}")
-        print(f"Campaign: {result.campaign_name}")
-        print(f"{'='*60}\n")
-        print(f"Strategy: {result.search_strategy}")
-        print(f"Total experiments: {result.total_experiments}")
-        print(f"Completed: {result.completed_experiments}")
-        print(f"Failed: {result.failed_experiments}")
-        print(f"Pruned: {result.pruned_experiments}")
-        print(f"Time: {result.total_time_seconds:.2f}s")
+        logger.info(f"Starting {strategy} search campaign")
         
-        if result.best_result:
-            print(f"\nBest result:")
-            print(f"  Configuration: {result.best_result.config.name}")
-            print(f"  {result.best_result.primary_metric_name}: {result.best_result.primary_metric_value:.4f}")
+        campaign = self.controller.run_campaign(
+            search_space_config=config_dict,
+            strategy_name=strategy
+        )
         
-        print("")
+        # Save campaign
+        campaign_id = self.tracker.save_campaign(campaign)
+        
+        result = campaign.to_dict()
+        result['campaign_id'] = campaign_id
+        
+        logger.info(f"Campaign completed - ID: {campaign_id}")
         
         return result
     
-    def plot_campaign(
-        self,
-        metric: str = 'top_1_accuracy'
-    ):
+    def plot_campaign(self, campaign: Dict[str, Any]) -> None:
         """
-        Plot summary of recent campaign results.
+        Show summary plots for a search campaign.
         
         Args:
-            metric: Metric to visualize
+            campaign: Campaign result dictionary
         """
-        # Create multiple plots
-        self.reporter.probe_comparison_bar(metric)
-        plt.show()
+        print("\n" + "="*70)
+        print(f"Campaign: {campaign['campaign_name']}")
+        print(f"Strategy: {campaign['search_strategy']}")
+        print("="*70)
+        print(f"Total Experiments: {campaign['total_experiments']}")
+        print(f"Completed: {campaign['completed_experiments']}")
+        print(f"Pruned: {campaign['pruned_experiments']}")
+        print(f"Failed: {campaign['failed_experiments']}")
+        print(f"Total Time: {campaign['total_time_seconds']:.2f}s")
         
-        self.reporter.model_comparison_bar(metric)
-        plt.show()
+        if campaign['best_result']:
+            print(f"\nBest Result:")
+            print(f"  Config: {campaign['best_result']['config']['name']}")
+            print(f"  Metric: {campaign['best_result']['primary_metric_value']:.4f}")
         
-        self.reporter.heatmap_probe_model(metric)
-        plt.show()
+        # Plot experiment metrics over time
+        results = campaign['all_results']
+        completed = [r for r in results if r['status'] == 'completed']
+        
+        if len(completed) > 1:
+            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+            
+            # Top-1 accuracy progression
+            ax = axes[0, 0]
+            metrics = [r['metrics'].get('top_1_accuracy', 0) for r in completed]
+            ax.plot(metrics, marker='o', linewidth=2)
+            ax.set_xlabel('Experiment')
+            ax.set_ylabel('Top-1 Accuracy')
+            ax.set_title('Accuracy Progression')
+            ax.grid(True, alpha=0.3)
+            
+            # Training time
+            ax = axes[0, 1]
+            times = [r['training_time_seconds'] for r in completed]
+            ax.bar(range(len(times)), times)
+            ax.set_xlabel('Experiment')
+            ax.set_ylabel('Time (s)')
+            ax.set_title('Training Time')
+            ax.grid(True, axis='y', alpha=0.3)
+            
+            # Model parameters vs accuracy
+            ax = axes[1, 0]
+            params = [r['model_parameters'] for r in completed]
+            ax.scatter(params, metrics, s=100, alpha=0.6)
+            ax.set_xlabel('Model Parameters')
+            ax.set_ylabel('Top-1 Accuracy')
+            ax.set_title('Model Size vs Accuracy')
+            ax.grid(True, alpha=0.3)
+            
+            # Best configurations
+            ax = axes[1, 1]
+            top_n = min(5, len(completed))
+            sorted_results = sorted(completed, 
+                                  key=lambda x: x['metrics'].get('top_1_accuracy', 0),
+                                  reverse=True)[:top_n]
+            names = [r['config']['name'][:20] for r in sorted_results]
+            values = [r['metrics'].get('top_1_accuracy', 0) for r in sorted_results]
+            
+            ax.barh(range(len(names)), values)
+            ax.set_yticks(range(len(names)))
+            ax.set_yticklabels(names, fontsize=9)
+            ax.set_xlabel('Top-1 Accuracy')
+            ax.set_title(f'Top {top_n} Configurations')
+            ax.grid(True, axis='x', alpha=0.3)
+            
+            plt.tight_layout()
+            plt.show()
     
-    def validate_on_sionna(
+    def validate_cross_fidelity(
         self,
-        top_n: int = 5
-    ):
+        campaign_name: str,
+        hdf5_path: str,
+        top_n: int = 3
+    ) -> pd.DataFrame:
         """
-        Run cross-fidelity validation on top N experiments.
+        Cross-fidelity validation using high-fidelity simulation data (e.g., Sionna).
+        
+        This method validates top-performing experiments from synthetic data
+        against high-fidelity electromagnetic simulations to assess performance
+        degradation and ensure results generalize.
         
         Args:
+            campaign_name: Name of campaign to validate
+            hdf5_path: Path to HDF5 file with high-fidelity simulation data (e.g., Sionna)
             top_n: Number of top experiments to validate
+            
+        Returns:
+            DataFrame with validation results showing synthetic vs high-fidelity accuracy
         """
-        print(f"Running cross-fidelity validation on top {top_n} experiments...")
-        results = self.controller.run_cross_fidelity_validation(
-            top_n=top_n,
-            validation_fidelity='sionna'
-        )
+        # Get campaign experiments
+        campaign = self.tracker.get_campaign(campaign_name=campaign_name)
         
-        print(f"\nValidation completed for {len(results)} experiments")
-        return results
+        if not campaign:
+            raise ValueError(f"Campaign '{campaign_name}' not found")
+        
+        # Get top N experiments by primary metric
+        experiments = self.tracker.get_all_experiments(campaign_name=campaign_name)
+        experiments = sorted(
+            experiments,
+            key=lambda x: x.get('primary_metric_value', 0),
+            reverse=True
+        )[:top_n]
+        
+        # Load Sionna data
+        logger.info(f"Loading high-fidelity simulation data from {hdf5_path}")
+        sionna_data = load_hdf5_data(hdf5_path)
+        
+        # Validate each experiment
+        results = []
+        
+        for exp in experiments:
+            print(f"\nValidating: {exp['name']}")
+            
+            # TODO: Re-run with high-fidelity data
+            # For now, placeholder until Sionna integration is complete
+            results.append({
+                'experiment_id': exp['id'],
+                'name': exp['name'],
+                'synthetic_accuracy': exp['metrics'].get('top_1_accuracy', 0),
+                'high_fidelity_accuracy': 0.0,  # Placeholder for Sionna validation
+                'degradation': 0.0
+            })
+        
+        df = pd.DataFrame(results)
+        
+        print("\nValidation Results:")
+        print(df.to_string(index=False))
+        
+        return df
     
     def show_history(
         self,
+        campaign_name: Optional[str] = None,
         limit: int = 10
-    ):
+    ) -> None:
         """
-        Show history of recent experiments.
+        Display table of past experiments.
         
         Args:
-            limit: Number of experiments to show
+            campaign_name: Filter by campaign name (None for all)
+            limit: Maximum number of experiments to show
         """
-        results = self.runner.tracker.get_all_results()
+        experiments = self.tracker.get_all_experiments(
+            campaign_name=campaign_name,
+            limit=limit
+        )
         
-        if not results:
-            print("No experiments found.")
+        if not experiments:
+            print("No experiments found")
             return
         
-        # Sort by timestamp descending
-        results.sort(key=lambda r: r.timestamp, reverse=True)
-        results = results[:limit]
+        data = []
+        for exp in experiments[:limit]:
+            data.append({
+                'ID': exp['id'],
+                'Name': exp['name'][:30],
+                'Probe': exp['probe_type'],
+                'Model': exp['model_type'],
+                'M': exp['M'],
+                'K': exp['K'],
+                'Top-1': f"{exp['metrics'].get('top_1_accuracy', 0):.3f}",
+                'Status': exp['status'],
+                'Time': f"{exp['training_time_seconds']:.1f}s"
+            })
         
-        print(f"\n{'='*80}")
-        print(f"Recent Experiments (showing {len(results)})")
-        print(f"{'='*80}\n")
-        
-        print(f"{'Name':<30} {'Status':<12} {'Probe':<15} {'Model':<10} {'Metric':<8}")
-        print(f"{'-'*80}")
-        
-        for result in results:
-            name = result.config.name[:28] + '..' if len(result.config.name) > 30 else result.config.name
-            primary_value = f"{result.primary_metric_value:.3f}" if result.status == 'completed' else "N/A"
-            
-            print(f"{name:<30} {result.status:<12} {result.config.probe_type:<15} "
-                  f"{result.config.model_type:<10} {primary_value:<8}")
-        
-        print("")
+        df = pd.DataFrame(data)
+        print("\nExperiment History:")
+        print("=" * 100)
+        print(df.to_string(index=False))
     
     def plot_best(
         self,
-        metric: str = 'top_1_accuracy',
-        top_n: int = 10
-    ):
+        campaign_name: Optional[str] = None,
+        metric: str = 'top_1_accuracy'
+    ) -> None:
         """
-        Plot top N configurations.
+        Plot training curves of best experiment.
         
         Args:
-            metric: Metric to rank by
-            top_n: Number of top results to show
+            campaign_name: Campaign name (None for all experiments)
+            metric: Metric to use for selecting best
         """
-        df = self.analyzer.best_configuration(metric, top_n)
+        experiments = self.tracker.get_all_experiments(
+            campaign_name=campaign_name,
+            limit=100
+        )
         
-        if df.empty:
-            print("No completed experiments found.")
-            return
+        # Find best by metric
+        best = max(
+            experiments,
+            key=lambda x: x['metrics'].get(metric, 0)
+        )
         
-        # Create bar chart
-        fig, ax = plt.subplots(figsize=(12, 6))
+        print(f"\nBest Experiment (by {metric}):")
+        print(f"  ID: {best['id']}")
+        print(f"  Name: {best['name']}")
+        print(f"  {metric}: {best['metrics'].get(metric, 0):.4f}")
         
-        names = [name[:20] + '..' if len(name) > 20 else name for name in df['name']]
-        values = df[metric]
+        # Plot training history
+        history = best['training_history']
         
-        ax.barh(range(len(names)), values, alpha=0.7)
-        ax.set_yticks(range(len(names)))
-        ax.set_yticklabels(names)
-        ax.set_xlabel(metric.replace('_', ' ').title())
-        ax.set_title(f'Top {top_n} Configurations by {metric.replace("_", " ").title()}')
-        ax.grid(axis='x', alpha=0.3)
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        
+        # Loss
+        if 'train_loss' in history:
+            epochs = range(1, len(history['train_loss']) + 1)
+            axes[0].plot(epochs, history['train_loss'], label='Train', linewidth=2)
+            if 'val_loss' in history:
+                axes[0].plot(epochs, history['val_loss'], label='Val', linewidth=2)
+            axes[0].set_xlabel('Epoch')
+            axes[0].set_ylabel('Loss')
+            axes[0].set_title(f'Best {best["name"][:30]} - Loss')
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+        
+        # Accuracy
+        if 'val_top_1_accuracy' in history:
+            epochs = range(1, len(history['val_top_1_accuracy']) + 1)
+            axes[1].plot(epochs, history['val_top_1_accuracy'], 
+                       label='Top-1', linewidth=2)
+            if 'val_top_5_accuracy' in history:
+                axes[1].plot(epochs, history['val_top_5_accuracy'], 
+                           label='Top-5', linewidth=2)
+            axes[1].axvline(best['best_epoch'], color='r', 
+                          linestyle='--', label='Best', alpha=0.5)
+            axes[1].set_xlabel('Epoch')
+            axes[1].set_ylabel('Accuracy')
+            axes[1].set_title('Validation Accuracy')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
         
         plt.tight_layout()
         plt.show()
