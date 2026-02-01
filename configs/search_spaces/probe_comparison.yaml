@@ -1,0 +1,57 @@
+# Probe Comparison Campaign
+# Systematic comparison of all probe types
+
+campaign_name: "Probe Comparison"
+
+# Search space
+search_space:
+  # System parameters
+  system:
+    N: 64
+    K: 64
+    M: [4, 8, 16]  # Test multiple sparsity levels
+    frequency: 28e9
+    snr_db: 20
+  
+  # All probe types
+  probes:
+    - random_uniform
+    - random_binary
+    - hadamard
+    - sobol
+    - halton
+    - dft_beams
+  
+  # Single model for fair comparison
+  models:
+    - mlp
+  
+  # Training configuration
+  training:
+    learning_rate: 0.001
+    batch_size: 64
+    max_epochs: 50
+    early_stopping_patience: 10
+  
+  # Data configuration
+  data:
+    source: synthetic_rayleigh
+    n_train: 10000
+    n_val: 2000
+    n_test: 2000
+
+# Search strategy
+strategy: grid_search
+
+# Metrics to track
+metrics:
+  - top_1_accuracy
+  - top_3_accuracy
+  - top_5_accuracy
+  - hit_at_1
+  - hit_at_3
+  - hit_at_5
+  - mean_reciprocal_rank
+  - power_ratio
+  - spectral_efficiency
+  - inference_time_ms
