@@ -145,6 +145,9 @@ phase_3:
       high: 1e-3
     
     # Model-specific (conditional on model type)
+    # Note: These conditions are evaluated by the Bayesian optimization
+    # strategy. If not using Bayesian optimization, these can be removed
+    # or will be ignored by grid search strategies.
     mlp_hidden_dims:
       type: "choice"
       values: [[256, 128], [256, 128, 64], [512, 256, 128]]
