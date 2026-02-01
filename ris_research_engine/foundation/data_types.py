@@ -70,6 +70,7 @@ class TrainingConfig:
     random_seed: int = 42
     num_workers: int = 0  # DataLoader workers (0 for Windows compatibility)
     device: str = 'auto'  # 'auto', 'cuda', 'cpu'
+    gradient_clip_max_norm: float = 1.0  # Gradient clipping max norm (0 to disable)
     
     def validate(self):
         """Validate training configuration."""
@@ -105,6 +106,7 @@ class TrainingConfig:
             'random_seed': self.random_seed,
             'num_workers': self.num_workers,
             'device': self.device,
+            'gradient_clip_max_norm': self.gradient_clip_max_norm,
         }
     
     @classmethod

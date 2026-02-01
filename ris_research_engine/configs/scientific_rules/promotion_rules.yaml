@@ -1,0 +1,352 @@
+# ============================================================================
+# Promotion Rules
+# ============================================================================
+# Scientific rules for promoting promising configurations to receive more
+# resources, deeper investigation, or priority in search phases.
+#
+# Promotion triggers:
+# - Significant improvement over baseline
+# - Unexpected strong performance
+# - Interesting scientific findings
+# ============================================================================
+
+name: "promotion_rules"
+description: "Rules for promoting promising configurations for deeper study"
+
+# ============================================================================
+# Performance-Based Promotion
+# ============================================================================
+performance_rules:
+  # Rule 1: New best found
+  - name: "new_best_found"
+    description: "New configuration significantly outperforms previous best"
+    condition:
+      type: "improvement"
+      metric: "top_1_accuracy"
+      previous_best: "current_best"
+      improvement_threshold: 0.05  # 5% improvement
+      min_epoch: 20
+    action: "promote"
+    promotion_type: "new_best"
+    actions:
+      - "save_checkpoint"
+      - "increase_budget"  # Allocate more epochs/resources
+      - "add_to_hall_of_fame"
+      - "trigger_hyperparameter_tuning"
+    reason: "New best: +5% accuracy improvement"
+    priority: "high"
+    
+  # Rule 2: Rapid improvement
+  - name: "rapid_learner"
+    description: "Configuration learning much faster than expected"
+    condition:
+      type: "learning_rate_analysis"
+      metric: "top_1_accuracy"
+      improvement_per_epoch: 0.02  # 2% per epoch
+      sustained_epochs: 5           # Sustained for 5 epochs
+      min_epoch: 10
+    action: "promote"
+    promotion_type: "rapid_learner"
+    actions:
+      - "extend_training"  # Train longer to see full potential
+      - "add_to_promising_configs"
+    reason: "Rapid learning detected"
+    priority: "medium"
+    
+  # Rule 3: Exceeds expected performance
+  - name: "exceeds_expectations"
+    description: "Performance much better than expected baseline"
+    condition:
+      type: "baseline_comparison"
+      metric: "top_1_accuracy"
+      expected_baseline: 0.6        # Expected 60% for this config
+      actual_threshold: 0.75        # Actually achieved 75%
+      min_epoch: 30
+    action: "promote"
+    promotion_type: "exceeds_expectations"
+    actions:
+      - "add_to_promising_configs"
+      - "investigate_mechanism"
+      - "test_on_harder_tasks"
+    reason: "Exceeded expected performance by 15%"
+    priority: "high"
+
+# ============================================================================
+# Scientific Discovery Promotion
+# ============================================================================
+scientific_rules:
+  # Rule 1: Unexpected winner
+  - name: "unexpected_winner"
+    description: "Unexpected configuration performs surprisingly well"
+    condition:
+      type: "prior_belief_violation"
+      prior_expectation: "poor"     # Expected to perform poorly
+      metric: "top_1_accuracy"
+      threshold: 0.7                # Actually performs at 70%
+      examples:
+        - probe: "random_uniform"   # Random usually underperforms
+          expected: 0.4
+          actual: ">0.7"
+    action: "promote"
+    promotion_type: "unexpected_discovery"
+    actions:
+      - "flag_for_investigation"
+      - "run_ablation_study"
+      - "compare_with_expectations"
+      - "write_research_note"
+    reason: "Unexpected strong performance - warrants investigation"
+    priority: "high"
+    
+  # Rule 2: Interesting trade-off
+  - name: "pareto_frontier_point"
+    description: "Configuration on Pareto frontier of accuracy vs. efficiency"
+    condition:
+      type: "pareto_optimal"
+      objectives:
+        - metric: "top_1_accuracy"
+          direction: "maximize"
+        - metric: "inference_time"
+          direction: "minimize"
+      min_epoch: 30
+    action: "promote"
+    promotion_type: "pareto_optimal"
+    actions:
+      - "add_to_pareto_frontier"
+      - "highlight_in_report"
+      - "recommend_for_deployment"
+    reason: "Pareto-optimal accuracy vs. efficiency"
+    priority: "medium"
+    
+  # Rule 3: Robust across conditions
+  - name: "robust_performer"
+    description: "Consistently good performance across random seeds/conditions"
+    condition:
+      type: "consistency_analysis"
+      metric: "top_1_accuracy"
+      min_mean: 0.65           # Mean > 65%
+      max_std: 0.02            # Std < 2%
+      min_seeds: 3
+      min_epoch: 30
+    action: "promote"
+    promotion_type: "robust"
+    actions:
+      - "recommend_for_production"
+      - "test_on_multiple_scenarios"
+      - "add_to_reliable_configs"
+    reason: "High mean accuracy with low variance"
+    priority: "high"
+
+# ============================================================================
+# Resource Allocation Promotion
+# ============================================================================
+resource_rules:
+  # Rule 1: High potential, needs more training
+  - name: "extend_training"
+    description: "Configuration showing strong upward trend"
+    condition:
+      type: "trend_analysis"
+      metric: "val_loss"
+      trend: "decreasing"
+      slope_threshold: -0.01   # Still improving significantly
+      epochs_analyzed: 10
+      current_epoch: ">80"     # Near end of training
+    action: "promote"
+    promotion_type: "extend_training"
+    actions:
+      - "add_epochs"
+      - "increase_patience"
+    reason: "Still improving near max_epochs - extend training"
+    priority: "medium"
+    additional_epochs: 20
+    
+  # Rule 2: Worth hyperparameter tuning
+  - name: "tune_hyperparameters"
+    description: "Good base performance, likely to improve with tuning"
+    condition:
+      type: "tuning_potential"
+      metric: "top_1_accuracy"
+      min_accuracy: 0.6         # Already decent
+      variance_across_seeds: ">0.05"  # High variance suggests tuning helps
+      min_epoch: 50
+    action: "promote"
+    promotion_type: "hyperparameter_tuning"
+    actions:
+      - "launch_bayesian_optimization"
+      - "increase_budget"
+      - "test_learning_rate_range"
+    reason: "Good base + high variance suggests tuning potential"
+    priority: "medium"
+
+# ============================================================================
+# Comparative Promotion
+# ============================================================================
+comparative_rules:
+  # Rule 1: Best in class
+  - name: "best_in_category"
+    description: "Best configuration within its category"
+    condition:
+      type: "categorical_best"
+      category_key: "probe.type"  # e.g., best probe type
+      metric: "top_1_accuracy"
+      min_epoch: 30
+    action: "promote"
+    promotion_type: "category_winner"
+    actions:
+      - "mark_as_category_best"
+      - "compare_across_categories"
+      - "highlight_in_summary"
+    reason: "Best performer in its category"
+    priority: "medium"
+    
+  # Rule 2: Emerging contender
+  - name: "emerging_contender"
+    description: "Rapidly approaching current best"
+    condition:
+      type: "convergence_analysis"
+      metric: "top_1_accuracy"
+      current_best: "global_best"
+      gap: "<0.1"              # Within 10% of best
+      trend: "converging"      # Gap closing
+      min_epoch: 25
+    action: "promote"
+    promotion_type: "emerging_contender"
+    actions:
+      - "monitor_closely"
+      - "compare_with_best"
+      - "add_to_watch_list"
+    reason: "Rapidly catching up to current best"
+    priority: "medium"
+
+# ============================================================================
+# Domain-Specific Promotion
+# ============================================================================
+domain_rules:
+  # Rule 1: Sparse configuration success
+  - name: "sparse_winner"
+    description: "Achieves high accuracy with very few measurements"
+    condition:
+      type: "sparsity_efficiency"
+      metric: "top_1_accuracy"
+      min_accuracy: 0.65
+      measurement_count: "<8"   # M < 8
+      efficiency_threshold: 0.08  # >8% accuracy per measurement
+    action: "promote"
+    promotion_type: "sparse_efficient"
+    actions:
+      - "highlight_efficiency"
+      - "test_even_sparser"
+      - "recommend_for_low_overhead"
+    reason: "High accuracy with minimal measurements"
+    priority: "high"
+    
+  # Rule 2: Simple model success
+  - name: "simple_effective"
+    description: "Simple model achieving competitive accuracy"
+    condition:
+      type: "simplicity_reward"
+      metric: "top_1_accuracy"
+      min_accuracy: 0.65
+      max_parameters: 50000      # < 50K parameters
+      complexity_class: "simple"
+    action: "promote"
+    promotion_type: "simple_effective"
+    actions:
+      - "recommend_for_deployment"
+      - "test_on_edge_devices"
+      - "highlight_practicality"
+    reason: "Simple model with strong performance"
+    priority: "high"
+
+# ============================================================================
+# Global Configuration
+# ============================================================================
+config:
+  # Promotion policy
+  promotion_policy:
+    enabled: true
+    max_promoted_configs: 5  # Limit promotions to avoid dilution
+    re_evaluation_interval: 10  # Re-check every 10 epochs
+    
+  # Priority handling
+  priority_handling:
+    high: "immediate_action"
+    medium: "next_phase"
+    low: "if_resources_available"
+    
+  # Resource allocation
+  resource_allocation:
+    promoted_budget_multiplier: 1.5  # Give 50% more resources
+    promoted_early_stop_patience_multiplier: 1.5
+    promoted_max_epochs_bonus: 20
+    
+  # Logging
+  log_promotions: true
+  log_promotion_analysis: true
+  save_promoted_checkpoints: true
+  
+  # Hall of Fame
+  hall_of_fame:
+    enabled: true
+    max_entries: 10
+    criteria: "top_1_accuracy"
+    track_metrics:
+      - "top_1_accuracy"
+      - "top_5_accuracy"
+      - "num_parameters"
+      - "inference_time"
+
+# ============================================================================
+# Promotion Actions
+# ============================================================================
+actions:
+  # Extended training
+  extend_training:
+    additional_epochs: 20
+    increase_patience: 5
+    
+  # Hyperparameter tuning
+  hyperparameter_tuning:
+    method: "bayesian_optimization"
+    num_trials: 20
+    metrics_to_optimize: ["top_1_accuracy"]
+    
+  # Investigation
+  investigation:
+    run_ablation: true
+    analyze_predictions: true
+    visualize_attention: true
+    compare_with_baseline: true
+    
+  # Deployment recommendation
+  deployment_recommendation:
+    run_stress_tests: true
+    measure_inference_time: true
+    test_on_different_scenarios: true
+    generate_deployment_report: true
+
+# ============================================================================
+# Rule Evaluation
+# ============================================================================
+evaluation:
+  # Check frequency
+  check_frequency: 5  # Check every 5 epochs
+  
+  # Multi-rule promotion
+  ensemble:
+    enabled: false  # Single rule can trigger promotion
+    
+  # Conflict resolution
+  conflict_resolution:
+    multiple_promotions: "allow"  # Can promote for multiple reasons
+    promotion_priority: "highest_priority_wins"
+
+# ============================================================================
+# Experiment-Specific Overrides
+# ============================================================================
+overrides:
+  allow_experiment_override: true
+  overridable_parameters:
+    - "improvement_threshold"
+    - "min_epoch"
+    - "priority"
+    - "additional_epochs"

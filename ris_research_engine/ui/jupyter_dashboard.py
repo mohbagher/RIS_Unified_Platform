@@ -1,784 +1,732 @@
-"""Interactive Jupyter dashboard for the RIS Auto-Research Engine."""
+"""Interactive dashboard with ipywidgets for RIS Auto-Research Engine."""
 
 import ipywidgets as widgets
-from IPython.display import display, clear_output, HTML
-import threading
+from IPython.display import display, clear_output
+import matplotlib.pyplot as plt
 import pandas as pd
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+import numpy as np
+import sqlite3
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+import json
+import time
 
 from ris_research_engine.foundation import (
     SystemConfig, TrainingConfig, ExperimentConfig, ResultTracker
 )
-from ris_research_engine.engine import ExperimentRunner, ResultAnalyzer
+from ris_research_engine.foundation.logging_config import get_logger
+from ris_research_engine.engine import ExperimentRunner, SearchController
 from ris_research_engine.plugins.probes import list_probes
-from ris_research_engine.plugins.models import list_models, get_model
+from ris_research_engine.plugins.models import list_models
+
+logger = get_logger(__name__)
 
 
 class RISDashboard:
-    """Interactive 5-tab dashboard for experiment management."""
+    """Interactive 5-tab dashboard for RIS experiments."""
     
-    def __init__(self, db_path: str = "outputs/experiments/results.db"):
-        """Initialize the dashboard.
+    def __init__(self, db_path: str = "results.db"):
+        """
+        Initialize the RIS Dashboard.
         
         Args:
-            db_path: Path to results database
+            db_path: Path to SQLite database
         """
-        self.runner = ExperimentRunner(db_path)
+        self.db_path = db_path
         self.tracker = ResultTracker(db_path)
-        self.analyzer = ResultAnalyzer(self.tracker)
+        self.runner = ExperimentRunner()
+        self.controller = SearchController(db_path)
+        
+        # Experiment queue
         self.queue = []
-        self.stop_flag = False
-        self.current_experiment_id = None
         
-        # Build all widgets
-        self._build_widgets()
-        self._build_tabs()
+        # Create widgets
+        self._create_widgets()
+        
+        logger.info("RISDashboard initialized")
     
-    def display(self):
-        """Display the dashboard."""
-        return display(self.tabs)
-    
-    def _build_widgets(self):
-        """Build all widgets for the dashboard."""
+    def _create_widgets(self):
+        """Create all widgets for the dashboard."""
+        
         # === Tab 1: Configure ===
-        
         # System parameters
-        self.n_slider = widgets.IntSlider(value=64, min=16, max=256, step=16, description='N (Elements):')
-        self.k_slider = widgets.IntSlider(value=64, min=8, max=256, step=8, description='K (Codebook):')
-        self.m_slider = widgets.IntSlider(value=8, min=1, max=64, step=1, description='M (Probes):')
-        self.freq_text = widgets.FloatText(value=28e9, description='Frequency (Hz):', style={'description_width': 'initial'})
-        self.snr_slider = widgets.IntSlider(value=20, min=0, max=40, step=5, description='SNR (dB):')
+        self.N_slider = widgets.IntSlider(value=64, min=16, max=256, step=16, 
+                                         description='N (elements):')
+        self.K_slider = widgets.IntSlider(value=64, min=16, max=256, step=16,
+                                         description='K (codebook):')
+        self.M_slider = widgets.IntSlider(value=8, min=2, max=64, step=2,
+                                         description='M (measurements):')
+        self.freq_slider = widgets.FloatSlider(value=28, min=1, max=100, step=1,
+                                              description='Frequency (GHz):')
+        self.snr_slider = widgets.FloatSlider(value=20, min=-10, max=40, step=5,
+                                             description='SNR (dB):')
         
-        # Probe selection
+        # Probe and model selection
+        available_probes = list_probes()
+        available_models = list_models()
+        
         self.probe_dropdown = widgets.Dropdown(
-            options=list_probes(),
-            description='Probe Type:',
-            style={'description_width': 'initial'}
+            options=available_probes,
+            value=available_probes[0] if available_probes else None,
+            description='Probe:'
         )
         
-        # Model selection
         self.model_dropdown = widgets.Dropdown(
-            options=list_models(),
-            description='Model Type:',
-            style={'description_width': 'initial'}
+            options=available_models,
+            value=available_models[0] if available_models else None,
+            description='Model:'
         )
-        self.model_dropdown.observe(self._on_model_change, names='value')
-        
-        # Model parameters (dynamic based on selected model)
-        self.model_params_output = widgets.Output()
-        self.model_param_widgets = {}
         
         # Training parameters
-        self.lr_text = widgets.FloatText(value=1e-3, description='Learning Rate:', style={'description_width': 'initial'})
-        self.epochs_text = widgets.IntText(value=100, description='Max Epochs:', style={'description_width': 'initial'})
-        self.batch_size_text = widgets.IntText(value=64, description='Batch Size:', style={'description_width': 'initial'})
-        
-        # Data source
-        self.data_source_dropdown = widgets.Dropdown(
-            options=['synthetic_rayleigh', 'synthetic_rician', 'hdf5_loader'],
-            value='synthetic_rayleigh',
-            description='Data Source:',
-            style={'description_width': 'initial'}
+        self.epochs_slider = widgets.IntSlider(value=100, min=10, max=500, step=10,
+                                              description='Epochs:')
+        self.lr_dropdown = widgets.Dropdown(
+            options=[1e-4, 5e-4, 1e-3, 5e-3, 1e-2],
+            value=1e-3,
+            description='Learning Rate:'
         )
-        self.data_path_text = widgets.Text(
-            value='',
-            placeholder='/path/to/data.h5',
-            description='HDF5 Path:',
-            style={'description_width': 'initial'},
-            layout=widgets.Layout(width='400px')
-        )
+        self.batch_slider = widgets.IntSlider(value=64, min=16, max=256, step=16,
+                                             description='Batch Size:')
         
         # Queue management
-        self.add_queue_button = widgets.Button(description='Add to Queue', button_style='success')
-        self.add_queue_button.on_click(self._add_to_queue)
+        self.add_queue_btn = widgets.Button(description='Add to Queue', 
+                                           button_style='success')
+        self.add_queue_btn.on_click(self._add_to_queue)
         
-        self.queue_output = widgets.Output(layout=widgets.Layout(height='200px', overflow_y='auto'))
-        self.clear_queue_button = widgets.Button(description='Clear Queue', button_style='warning')
-        self.clear_queue_button.on_click(self._clear_queue)
+        self.view_queue_btn = widgets.Button(description='View Queue',
+                                            button_style='info')
+        self.view_queue_btn.on_click(self._view_queue)
+        
+        self.clear_queue_btn = widgets.Button(description='Clear Queue',
+                                             button_style='warning')
+        self.clear_queue_btn.on_click(self._clear_queue)
+        
+        self.queue_output = widgets.Output()
         
         # === Tab 2: Run ===
+        self.run_single_btn = widgets.Button(description='Run Single Experiment',
+                                            button_style='primary',
+                                            layout=widgets.Layout(width='200px'))
+        self.run_single_btn.on_click(self._run_single)
         
-        # Run buttons
-        self.run_single_button = widgets.Button(description='Run Single', button_style='primary', icon='play')
-        self.run_single_button.on_click(self._run_single)
+        self.run_queue_btn = widgets.Button(description='Run Queue',
+                                           button_style='success',
+                                           layout=widgets.Layout(width='200px'))
+        self.run_queue_btn.on_click(self._run_queue)
         
-        self.run_queue_button = widgets.Button(description='Run Queue', button_style='primary', icon='list')
-        self.run_queue_button.on_click(self._run_queue)
+        self.run_search_btn = widgets.Button(description='Run Search',
+                                            button_style='info',
+                                            layout=widgets.Layout(width='200px'))
+        self.run_search_btn.on_click(self._run_search)
         
-        self.stop_button = widgets.Button(description='Stop', button_style='danger', icon='stop')
-        self.stop_button.on_click(self._stop_execution)
-        self.stop_button.disabled = True
+        self.stop_btn = widgets.Button(description='Stop',
+                                      button_style='danger',
+                                      layout=widgets.Layout(width='200px'),
+                                      disabled=True)
         
-        # Progress display
-        self.current_exp_label = widgets.Label(value='No experiment running')
-        self.epoch_progress = widgets.IntProgress(min=0, max=100, description='Epoch:', bar_style='info')
-        self.metrics_html = widgets.HTML(value='<i>Metrics will appear here during training...</i>')
-        self.campaign_progress = widgets.IntProgress(min=0, max=100, description='Campaign:', bar_style='success')
+        self.progress_bar = widgets.FloatProgress(value=0, min=0, max=1,
+                                                 description='Progress:',
+                                                 layout=widgets.Layout(width='100%'))
         
-        self.run_output = widgets.Output(layout=widgets.Layout(height='300px', overflow_y='auto'))
+        self.status_text = widgets.HTML(value='<b>Ready</b>')
+        
+        self.run_output = widgets.Output()
         
         # === Tab 3: Results ===
-        
-        self.experiment_selector = widgets.Dropdown(
+        self.exp_selector = widgets.Dropdown(
             options=[],
             description='Experiment:',
-            style={'description_width': 'initial'},
-            layout=widgets.Layout(width='600px')
+            layout=widgets.Layout(width='100%')
         )
-        self.experiment_selector.observe(self._on_experiment_selected, names='value')
+        self.exp_selector.observe(self._on_experiment_selected, names='value')
         
-        self.refresh_exp_button = widgets.Button(description='Refresh', button_style='info', icon='refresh')
-        self.refresh_exp_button.on_click(self._refresh_experiments)
+        self.refresh_exp_btn = widgets.Button(description='Refresh',
+                                             button_style='info')
+        self.refresh_exp_btn.on_click(self._refresh_experiments)
         
-        self.metrics_table_html = widgets.HTML(value='<i>Select an experiment to view metrics</i>')
-        self.training_plot_output = widgets.Output()
-        
-        self.compare_selector = widgets.SelectMultiple(
-            options=[],
-            description='Select to Compare:',
-            style={'description_width': 'initial'},
-            layout=widgets.Layout(width='600px', height='150px')
-        )
-        self.compare_button = widgets.Button(description='Compare Selected', button_style='primary')
-        self.compare_button.on_click(self._compare_experiments)
-        self.compare_output = widgets.Output()
+        self.results_output = widgets.Output()
         
         # === Tab 4: Analysis ===
-        
         self.campaign_selector = widgets.Dropdown(
             options=[],
             description='Campaign:',
-            style={'description_width': 'initial'},
-            layout=widgets.Layout(width='400px')
+            layout=widgets.Layout(width='100%')
+        )
+        self.campaign_selector.observe(self._on_campaign_selected, names='value')
+        
+        self.refresh_camp_btn = widgets.Button(description='Refresh',
+                                              button_style='info')
+        self.refresh_camp_btn.on_click(self._refresh_campaigns)
+        
+        self.metric_dropdown = widgets.Dropdown(
+            options=['top_1_accuracy', 'top_5_accuracy', 'top_10_accuracy',
+                    'mean_reciprocal_rank', 'inference_time'],
+            value='top_1_accuracy',
+            description='Metric:'
         )
         
-        self.refresh_campaign_button = widgets.Button(description='Refresh', button_style='info', icon='refresh')
-        self.refresh_campaign_button.on_click(self._refresh_campaigns)
+        self.plot_comparison_btn = widgets.Button(description='Plot Comparison',
+                                                 button_style='primary')
+        self.plot_comparison_btn.on_click(self._plot_comparison)
         
-        self.analysis_output = widgets.Output(layout=widgets.Layout(height='600px', overflow_y='auto'))
+        self.export_btn = widgets.Button(description='Export Results',
+                                        button_style='success')
+        self.export_btn.on_click(self._export_results)
         
-        self.generate_report_button = widgets.Button(description='Generate Report', button_style='success')
-        self.generate_report_button.on_click(self._generate_report)
+        self.analysis_output = widgets.Output()
         
         # === Tab 5: Database ===
-        
-        self.filter_probe_text = widgets.Text(placeholder='Filter by probe type', description='Probe:')
-        self.filter_model_text = widgets.Text(placeholder='Filter by model type', description='Model:')
-        self.filter_min_acc_text = widgets.FloatText(value=0.0, description='Min Accuracy:', style={'description_width': 'initial'})
-        
-        self.sort_dropdown = widgets.Dropdown(
-            options=['timestamp', 'top_1_accuracy', 'training_time_seconds'],
-            value='timestamp',
-            description='Sort by:',
-            style={'description_width': 'initial'}
+        self.filter_campaign = widgets.Text(description='Campaign:',
+                                           placeholder='Filter by campaign')
+        self.filter_status = widgets.Dropdown(
+            options=['all', 'completed', 'failed', 'pruned'],
+            value='all',
+            description='Status:'
         )
+        self.filter_limit = widgets.IntSlider(value=20, min=5, max=100, step=5,
+                                             description='Limit:')
         
-        self.apply_filter_button = widgets.Button(description='Apply Filters', button_style='primary')
-        self.apply_filter_button.on_click(self._apply_filters)
+        self.apply_filter_btn = widgets.Button(description='Apply Filter',
+                                              button_style='primary')
+        self.apply_filter_btn.on_click(self._apply_filter)
         
-        self.db_table_output = widgets.Output(layout=widgets.Layout(height='400px', overflow_y='auto'))
+        self.export_csv_btn = widgets.Button(description='Export CSV',
+                                            button_style='success')
+        self.export_csv_btn.on_click(lambda x: self._export_database('csv'))
         
-        self.export_csv_button = widgets.Button(description='Export CSV', button_style='info')
-        self.export_csv_button.on_click(self._export_csv)
+        self.export_json_btn = widgets.Button(description='Export JSON',
+                                             button_style='info')
+        self.export_json_btn.on_click(lambda x: self._export_database('json'))
         
-        self.export_json_button = widgets.Button(description='Export JSON', button_style='info')
-        self.export_json_button.on_click(self._export_json)
+        self.db_output = widgets.Output()
         
-        self.db_stats_html = widgets.HTML(value='<i>Loading database statistics...</i>')
-        
-        # Initialize model params display
-        self._on_model_change(None)
-    
-    def _build_tabs(self):
-        """Build the 5-tab interface."""
-        # Tab 1: Configure
-        tab1 = widgets.VBox([
-            widgets.HTML('<h3>System Parameters</h3>'),
-            widgets.HBox([self.n_slider, self.k_slider, self.m_slider]),
-            widgets.HBox([self.freq_text, self.snr_slider]),
-            
-            widgets.HTML('<h3>Probe & Model Selection</h3>'),
-            widgets.HBox([self.probe_dropdown, self.model_dropdown]),
-            self.model_params_output,
-            
-            widgets.HTML('<h3>Training Parameters</h3>'),
-            widgets.HBox([self.lr_text, self.epochs_text, self.batch_size_text]),
-            
-            widgets.HTML('<h3>Data Source</h3>'),
-            widgets.HBox([self.data_source_dropdown, self.data_path_text]),
-            
-            widgets.HTML('<h3>Experiment Queue</h3>'),
-            self.add_queue_button,
-            self.queue_output,
-            self.clear_queue_button,
-        ], layout=widgets.Layout(padding='10px'))
-        
-        # Tab 2: Run
-        tab2 = widgets.VBox([
-            widgets.HTML('<h3>Run Experiments</h3>'),
-            widgets.HBox([self.run_single_button, self.run_queue_button, self.stop_button]),
-            
-            widgets.HTML('<h3>Progress</h3>'),
-            self.current_exp_label,
-            self.epoch_progress,
-            self.metrics_html,
-            self.campaign_progress,
-            
-            widgets.HTML('<h3>Output Log</h3>'),
-            self.run_output,
-        ], layout=widgets.Layout(padding='10px'))
-        
-        # Tab 3: Results
-        tab3 = widgets.VBox([
-            widgets.HTML('<h3>Select Experiment</h3>'),
-            widgets.HBox([self.experiment_selector, self.refresh_exp_button]),
-            
-            widgets.HTML('<h3>Metrics Summary</h3>'),
-            self.metrics_table_html,
-            
-            widgets.HTML('<h3>Training Curves</h3>'),
-            self.training_plot_output,
-            
-            widgets.HTML('<h3>Compare Experiments</h3>'),
-            self.compare_selector,
-            self.compare_button,
-            self.compare_output,
-        ], layout=widgets.Layout(padding='10px'))
-        
-        # Tab 4: Analysis
-        tab4 = widgets.VBox([
-            widgets.HTML('<h3>Campaign Analysis</h3>'),
-            widgets.HBox([self.campaign_selector, self.refresh_campaign_button]),
-            self.generate_report_button,
-            
-            widgets.HTML('<h3>Analysis Plots</h3>'),
-            self.analysis_output,
-        ], layout=widgets.Layout(padding='10px'))
-        
-        # Tab 5: Database
-        tab5 = widgets.VBox([
-            widgets.HTML('<h3>Filter & Sort</h3>'),
-            widgets.HBox([self.filter_probe_text, self.filter_model_text, self.filter_min_acc_text]),
-            widgets.HBox([self.sort_dropdown, self.apply_filter_button]),
-            
-            widgets.HTML('<h3>Experiment Table</h3>'),
-            self.db_table_output,
-            
-            widgets.HTML('<h3>Export & Statistics</h3>'),
-            widgets.HBox([self.export_csv_button, self.export_json_button]),
-            self.db_stats_html,
-        ], layout=widgets.Layout(padding='10px'))
-        
-        # Create tabs
-        self.tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4, tab5])
-        self.tabs.set_title(0, 'Configure')
-        self.tabs.set_title(1, 'Run')
-        self.tabs.set_title(2, 'Results')
-        self.tabs.set_title(3, 'Analysis')
-        self.tabs.set_title(4, 'Database')
-        
-        # Initialize displays
+        # Initialize
         self._refresh_experiments(None)
         self._refresh_campaigns(None)
-        self._update_db_stats()
-        self._apply_filters(None)
     
-    def _on_model_change(self, change):
-        """Update model parameters when model selection changes."""
-        model_name = self.model_dropdown.value
-        
-        with self.model_params_output:
-            clear_output(wait=True)
-            
-            # Get default params for selected model
-            model_builder = get_model(model_name)
-            default_params = model_builder.get_default_params()
-            
-            # Create widgets for each parameter
-            self.model_param_widgets = {}
-            param_widgets = []
-            
-            for param_name, param_value in default_params.items():
-                if isinstance(param_value, bool):
-                    widget = widgets.Checkbox(value=param_value, description=param_name)
-                elif isinstance(param_value, int):
-                    widget = widgets.IntText(value=param_value, description=param_name)
-                elif isinstance(param_value, float):
-                    widget = widgets.FloatText(value=param_value, description=param_name)
-                elif isinstance(param_value, str):
-                    widget = widgets.Text(value=param_value, description=param_name)
-                elif isinstance(param_value, list):
-                    widget = widgets.Text(value=str(param_value), description=param_name)
-                else:
-                    continue
-                
-                self.model_param_widgets[param_name] = widget
-                param_widgets.append(widget)
-            
-            if param_widgets:
-                display(widgets.HTML('<b>Model Parameters:</b>'))
-                display(widgets.VBox(param_widgets))
-            else:
-                display(widgets.HTML('<i>No configurable parameters</i>'))
-    
-    def _get_current_config(self) -> ExperimentConfig:
-        """Build ExperimentConfig from current widget values."""
-        # Extract model params
-        model_params = {}
-        for param_name, widget in self.model_param_widgets.items():
-            value = widget.value
-            # Try to parse lists
-            if isinstance(value, str) and value.startswith('['):
-                try:
-                    import ast
-                    value = ast.literal_eval(value)
-                except:
-                    pass
-            model_params[param_name] = value
-        
-        # Build system config
-        N = self.n_slider.value
-        system = SystemConfig(
-            N=N,
-            N_x=int(N**0.5),
-            N_y=int(N**0.5),
-            K=self.k_slider.value,
-            M=self.m_slider.value,
-            frequency=self.freq_text.value,
-            snr_db=self.snr_slider.value,
-        )
-        
-        # Build training config
-        training = TrainingConfig(
-            learning_rate=self.lr_text.value,
-            batch_size=self.batch_size_text.value,
-            max_epochs=self.epochs_text.value,
-        )
-        
-        # Build data params
-        data_params = {'n_train': 10000, 'n_val': 2000, 'n_test': 2000}
-        if self.data_source_dropdown.value == 'hdf5_loader' and self.data_path_text.value:
-            data_params = {'h5_path': self.data_path_text.value}
-        
-        # Create experiment config
-        name = f"{self.probe_dropdown.value}_{self.model_dropdown.value}_M{self.m_slider.value}_K{self.k_slider.value}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        config = ExperimentConfig(
-            name=name,
-            system=system,
-            training=training,
-            probe_type=self.probe_dropdown.value,
-            probe_params={},
-            model_type=self.model_dropdown.value,
-            model_params=model_params,
-            data_source=self.data_source_dropdown.value,
-            data_params=data_params,
-            metrics=['top_1_accuracy', 'hit_at_1', 'power_ratio'],
-            tags=['dashboard'],
-            notes='Created from dashboard',
-            data_fidelity='synthetic',
-        )
-        
-        return config
-    
-    def _add_to_queue(self, button):
+    def _add_to_queue(self, btn):
         """Add current configuration to queue."""
-        try:
-            config = self._get_current_config()
-            self.queue.append(config)
-            
-            with self.queue_output:
-                clear_output(wait=True)
-                print(f"Experiment Queue ({len(self.queue)} items):")
-                print("="*60)
-                for i, cfg in enumerate(self.queue, 1):
-                    print(f"{i}. {cfg.name}")
-                    print(f"   Probe: {cfg.probe_type}, Model: {cfg.model_type}, M={cfg.system.M}, K={cfg.system.K}")
-                print("="*60)
-        except Exception as e:
-            with self.queue_output:
-                print(f"Error adding to queue: {e}")
+        config = self._get_current_config()
+        self.queue.append(config)
+        
+        with self.queue_output:
+            clear_output(wait=True)
+            print(f"✓ Added to queue (total: {len(self.queue)})")
+            print(f"Config: {config['name']}")
     
-    def _clear_queue(self, button):
+    def _view_queue(self, btn):
+        """Display current queue."""
+        with self.queue_output:
+            clear_output(wait=True)
+            if not self.queue:
+                print("Queue is empty")
+            else:
+                print(f"Queue ({len(self.queue)} experiments):")
+                print("=" * 60)
+                for i, cfg in enumerate(self.queue, 1):
+                    print(f"{i}. {cfg['name']}")
+    
+    def _clear_queue(self, btn):
         """Clear the experiment queue."""
-        self.queue = []
+        self.queue.clear()
         with self.queue_output:
             clear_output(wait=True)
             print("Queue cleared")
     
-    def _run_single(self, button):
-        """Run single experiment from current config."""
-        def run():
-            try:
-                config = self._get_current_config()
-                
-                with self.run_output:
-                    print(f"\n{'='*60}")
-                    print(f"Starting experiment: {config.name}")
-                    print(f"{'='*60}")
-                
-                # Disable buttons
-                self.run_single_button.disabled = True
-                self.run_queue_button.disabled = True
-                self.stop_button.disabled = False
-                self.stop_flag = False
-                
-                # Run experiment
-                result = self.runner.run(config, progress_callback=self._update_progress)
-                
-                with self.run_output:
-                    print(f"\n✅ Experiment completed!")
-                    print(f"Top-1 Accuracy: {result.metrics.get('top_1_accuracy', 0.0):.3f}")
-                    print(f"Training time: {result.training_time_seconds:.1f}s")
-                
-            except Exception as e:
-                with self.run_output:
-                    print(f"\n❌ Error: {e}")
-            finally:
-                # Re-enable buttons
-                self.run_single_button.disabled = False
-                self.run_queue_button.disabled = False
-                self.stop_button.disabled = True
-                
-                # Reset progress
-                self.current_exp_label.value = 'No experiment running'
-                self.epoch_progress.value = 0
-                self.metrics_html.value = '<i>Completed</i>'
+    def _get_current_config(self) -> ExperimentConfig:
+        """Build ExperimentConfig from current widget values."""
+        N = self.N_slider.value
+        N_x = int(np.sqrt(N))
+        N_y = N_x
         
-        # Run in thread
-        thread = threading.Thread(target=run)
-        thread.start()
-    
-    def _run_queue(self, button):
-        """Run all queued experiments."""
-        def run():
-            try:
-                if not self.queue:
-                    with self.run_output:
-                        print("Queue is empty!")
-                    return
-                
-                # Disable buttons
-                self.run_single_button.disabled = True
-                self.run_queue_button.disabled = True
-                self.stop_button.disabled = False
-                self.stop_flag = False
-                
-                # Run all experiments
-                total = len(self.queue)
-                self.campaign_progress.max = total
-                
-                for i, config in enumerate(self.queue):
-                    if self.stop_flag:
-                        with self.run_output:
-                            print("\n⚠️ Stopped by user")
-                        break
-                    
-                    with self.run_output:
-                        print(f"\n{'='*60}")
-                        print(f"[{i+1}/{total}] Running: {config.name}")
-                        print(f"{'='*60}")
-                    
-                    self.campaign_progress.value = i
-                    
-                    try:
-                        result = self.runner.run(config, progress_callback=self._update_progress, campaign_name="dashboard_queue")
-                        
-                        with self.run_output:
-                            print(f"✅ Completed: {result.metrics.get('top_1_accuracy', 0.0):.3f} accuracy")
-                    except Exception as e:
-                        with self.run_output:
-                            print(f"❌ Failed: {e}")
-                
-                self.campaign_progress.value = total
-                
-                with self.run_output:
-                    print(f"\n{'='*60}")
-                    print("Queue execution completed!")
-                    print(f"{'='*60}")
-                
-                # Clear queue
-                self.queue = []
-                with self.queue_output:
-                    clear_output(wait=True)
-                    print("Queue cleared after execution")
-                
-            except Exception as e:
-                with self.run_output:
-                    print(f"\n❌ Error: {e}")
-            finally:
-                # Re-enable buttons
-                self.run_single_button.disabled = False
-                self.run_queue_button.disabled = False
-                self.stop_button.disabled = True
-                
-                # Reset progress
-                self.current_exp_label.value = 'No experiment running'
-                self.epoch_progress.value = 0
-                self.campaign_progress.value = 0
+        system = SystemConfig(
+            N=N, N_x=N_x, N_y=N_y,
+            K=self.K_slider.value,
+            M=self.M_slider.value,
+            frequency=self.freq_slider.value * 1e9,
+            snr_db=self.snr_slider.value
+        )
         
-        # Run in thread
-        thread = threading.Thread(target=run)
-        thread.start()
+        training = TrainingConfig(
+            learning_rate=self.lr_dropdown.value,
+            batch_size=self.batch_slider.value,
+            max_epochs=self.epochs_slider.value
+        )
+        
+        probe = self.probe_dropdown.value
+        model = self.model_dropdown.value
+        
+        config = ExperimentConfig(
+            name=f"{probe}_{model}_M{system.M}_K{system.K}",
+            system=system,
+            training=training,
+            probe_type=probe,
+            probe_params={},
+            model_type=model,
+            model_params={},
+            data_source='synthetic_rayleigh',
+            data_params={'n_samples': 1000},
+            metrics=['top_k_accuracy', 'mean_reciprocal_rank'],
+            tags=['dashboard']
+        )
+        
+        return config
     
-    def _stop_execution(self, button):
-        """Stop the current execution."""
-        self.stop_flag = True
+    def _run_single(self, btn):
+        """Run a single experiment."""
+        config = self._get_current_config()
+        
+        self.run_single_btn.disabled = True
+        self.run_queue_btn.disabled = True
+        self.run_search_btn.disabled = True
+        self.stop_btn.disabled = False
+        
         with self.run_output:
-            print("\n⚠️ Stop requested...")
+            clear_output(wait=True)
+            print(f"Running: {config.name}")
+            print("=" * 60)
+            
+            try:
+                self.status_text.value = '<b>Running...</b>'
+                self.progress_bar.value = 0.5
+                
+                result = self.runner.run(config)
+                exp_id = self.tracker.save_experiment(result)
+                
+                self.progress_bar.value = 1.0
+                self.status_text.value = f'<b>Completed - ID: {exp_id}</b>'
+                
+                print(f"✓ Experiment completed - ID: {exp_id}")
+                print(f"Status: {result.status}")
+                print(f"Top-1 Accuracy: {result.metrics.get('top_1_accuracy', 0):.4f}")
+                
+                self._refresh_experiments(None)
+                
+            except Exception as e:
+                self.status_text.value = '<b>Failed</b>'
+                print(f"✗ Error: {str(e)}")
+                logger.error(f"Experiment failed: {e}", exc_info=True)
+            
+            finally:
+                self.run_single_btn.disabled = False
+                self.run_queue_btn.disabled = False
+                self.run_search_btn.disabled = False
+                self.stop_btn.disabled = True
+                self.progress_bar.value = 0
     
-    def _update_progress(self, epoch: int, total_epochs: int, metrics: Dict[str, float]):
-        """Update progress widgets."""
-        self.epoch_progress.max = total_epochs
-        self.epoch_progress.value = epoch
+    def _run_queue(self, btn):
+        """Run all experiments in queue."""
+        if not self.queue:
+            with self.run_output:
+                clear_output(wait=True)
+                print("Queue is empty")
+            return
         
-        metrics_html = f"<b>Epoch {epoch}/{total_epochs}</b><br>"
-        for key, value in metrics.items():
-            metrics_html += f"{key}: {value:.4f}<br>"
+        self.run_single_btn.disabled = True
+        self.run_queue_btn.disabled = True
+        self.run_search_btn.disabled = True
+        self.stop_btn.disabled = False
         
-        self.metrics_html.value = metrics_html
+        with self.run_output:
+            clear_output(wait=True)
+            print(f"Running queue ({len(self.queue)} experiments)...")
+            print("=" * 60)
+            
+            total = len(self.queue)
+            
+            for i, config in enumerate(self.queue, 1):
+                print(f"\n[{i}/{total}] {config.name}")
+                
+                try:
+                    self.status_text.value = f'<b>Running {i}/{total}</b>'
+                    self.progress_bar.value = i / total
+                    
+                    result = self.runner.run(config)
+                    exp_id = self.tracker.save_experiment(result)
+                    
+                    print(f"  ✓ Completed - ID: {exp_id}")
+                    
+                except Exception as e:
+                    print(f"  ✗ Failed: {str(e)}")
+                    logger.error(f"Queue experiment failed: {e}")
+            
+            print("\n" + "=" * 60)
+            print("Queue completed")
+            
+            self.queue.clear()
+            self._refresh_experiments(None)
+        
+        self.run_single_btn.disabled = False
+        self.run_queue_btn.disabled = False
+        self.run_search_btn.disabled = False
+        self.stop_btn.disabled = True
+        self.progress_bar.value = 0
+        self.status_text.value = '<b>Ready</b>'
     
-    def _refresh_experiments(self, button):
-        """Refresh experiment list."""
-        experiments = self.tracker.get_all_experiments(status='completed')
-        
-        if experiments:
-            options = [(f"{e['name']} (ID: {e['id']})", e['id']) for e in experiments]
-            self.experiment_selector.options = options
-            self.compare_selector.options = options
-        else:
-            self.experiment_selector.options = [('No experiments found', None)]
-            self.compare_selector.options = []
+    def _run_search(self, btn):
+        """Run a search campaign."""
+        with self.run_output:
+            clear_output(wait=True)
+            print("Search feature coming soon...")
+            print("Use RISEngine.search() for now")
     
     def _on_experiment_selected(self, change):
         """Handle experiment selection."""
         exp_id = change['new']
-        
         if exp_id is None:
             return
         
-        exp = self.tracker.get_experiment(exp_id)
-        
-        if exp is None:
-            return
-        
-        # Update metrics table
-        metrics_df = pd.DataFrame([
-            {'Metric': k, 'Value': f"{v:.4f}"} for k, v in exp['metrics'].items()
-        ])
-        
-        self.metrics_table_html.value = metrics_df.to_html(index=False)
-        
-        # Plot training curves
-        with self.training_plot_output:
-            clear_output(wait=True)
-            fig = self.analyzer.plot_training_curves(exp_id)
-            if fig:
-                display(fig)
-    
-    def _compare_experiments(self, button):
-        """Compare selected experiments."""
-        exp_ids = list(self.compare_selector.value)
-        
-        if len(exp_ids) < 2:
-            with self.compare_output:
-                clear_output(wait=True)
-                print("Please select at least 2 experiments to compare")
-            return
-        
-        comparison = self.tracker.compare_experiments(exp_ids)
-        
-        with self.compare_output:
+        with self.results_output:
             clear_output(wait=True)
             
-            # Build comparison table
-            rows = []
-            for exp_data in comparison['comparison']['experiments']:
-                row = {
-                    'ID': exp_data['id'],
-                    'Name': exp_data['name'][:40],
-                }
-                row.update(exp_data['metrics'])
-                rows.append(row)
+            exp = self.tracker.get_experiment(exp_id)
+            if not exp:
+                print("Experiment not found")
+                return
             
-            df = pd.DataFrame(rows)
-            display(HTML("<h4>Experiment Comparison</h4>"))
-            display(df)
+            # Display metrics
+            print(f"Experiment ID: {exp['id']}")
+            print(f"Name: {exp['name']}")
+            print(f"Status: {exp['status']}")
+            print("=" * 70)
+            
+            print("\nMetrics:")
+            metrics_data = []
+            for key, val in exp['metrics'].items():
+                if isinstance(val, float):
+                    metrics_data.append({'Metric': key, 'Value': f"{val:.4f}"})
+                else:
+                    metrics_data.append({'Metric': key, 'Value': str(val)})
+            
+            df = pd.DataFrame(metrics_data)
+            print(df.to_string(index=False))
+            
+            print(f"\nTraining Time: {exp['training_time_seconds']:.2f}s")
+            print(f"Model Parameters: {exp['model_parameters']:,}")
+            
+            # Plot training curves
+            if 'training_history' in exp and exp['training_history']:
+                history = exp['training_history']
+                
+                fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+                
+                # Loss
+                if 'train_loss' in history:
+                    epochs = range(1, len(history['train_loss']) + 1)
+                    axes[0].plot(epochs, history['train_loss'], label='Train', linewidth=2)
+                    if 'val_loss' in history:
+                        axes[0].plot(epochs, history['val_loss'], label='Val', linewidth=2)
+                    axes[0].set_xlabel('Epoch')
+                    axes[0].set_ylabel('Loss')
+                    axes[0].set_title('Training Loss')
+                    axes[0].legend()
+                    axes[0].grid(True, alpha=0.3)
+                
+                # Accuracy
+                if 'val_top_1_accuracy' in history:
+                    epochs = range(1, len(history['val_top_1_accuracy']) + 1)
+                    axes[1].plot(epochs, history['val_top_1_accuracy'], 
+                               label='Top-1', linewidth=2)
+                    if 'val_top_5_accuracy' in history:
+                        axes[1].plot(epochs, history['val_top_5_accuracy'], 
+                                   label='Top-5', linewidth=2)
+                    axes[1].set_xlabel('Epoch')
+                    axes[1].set_ylabel('Accuracy')
+                    axes[1].set_title('Validation Accuracy')
+                    axes[1].legend()
+                    axes[1].grid(True, alpha=0.3)
+                
+                plt.tight_layout()
+                plt.show()
     
-    def _refresh_campaigns(self, button):
-        """Refresh campaign list."""
-        experiments = self.tracker.get_all_experiments(status='completed')
+    def _refresh_experiments(self, btn):
+        """Refresh experiment list."""
+        experiments = self.tracker.get_all_experiments(limit=50)
         
-        # Extract unique campaign names
-        campaigns = set()
-        for exp in experiments:
-            if exp['campaign_name']:
-                campaigns.add(exp['campaign_name'])
+        options = [(f"ID {e['id']}: {e['name'][:40]}", e['id']) 
+                  for e in experiments]
         
-        if campaigns:
-            self.campaign_selector.options = sorted(campaigns)
-        else:
-            self.campaign_selector.options = [('No campaigns found', None)]
-    
-    def _generate_report(self, button):
-        """Generate analysis report for selected campaign."""
-        campaign_name = self.campaign_selector.value
+        self.exp_selector.options = options
         
-        if not campaign_name or campaign_name == 'No campaigns found':
-            with self.analysis_output:
+        if btn is not None:
+            with self.results_output:
                 clear_output(wait=True)
-                print("Please select a campaign")
+                print(f"Refreshed - {len(experiments)} experiments found")
+    
+    def _on_campaign_selected(self, change):
+        """Handle campaign selection."""
+        campaign_id = change['new']
+        if campaign_id is None:
             return
         
         with self.analysis_output:
             clear_output(wait=True)
             
-            print(f"Generating analysis for campaign: {campaign_name}")
-            print("="*60)
+            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            if not campaign:
+                print("Campaign not found")
+                return
             
-            # Probe comparison
-            print("\n1. Probe Comparison")
-            probe_df = self.analyzer.compare_probes(campaign_name=campaign_name)
-            if not probe_df.empty:
-                display(probe_df)
-                fig = self.analyzer.plot_probe_comparison(campaign_name=campaign_name)
-                if fig:
-                    display(fig)
-            else:
-                print("No data available")
+            print(f"Campaign: {campaign['name']}")
+            print(f"Strategy: {campaign['search_strategy']}")
+            print("=" * 70)
+            print(f"Total Experiments: {campaign['total_experiments']}")
+            print(f"Completed: {campaign['completed']}")
             
-            # Model comparison
-            print("\n2. Model Comparison")
-            model_df = self.analyzer.compare_models(campaign_name=campaign_name)
-            if not model_df.empty:
-                display(model_df)
-                fig = self.analyzer.plot_model_comparison(campaign_name=campaign_name)
-                if fig:
-                    display(fig)
-            else:
-                print("No data available")
+            # Get campaign experiments
+            experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
             
-            # Sparsity analysis
-            print("\n3. Sparsity Analysis")
-            sparsity_df = self.analyzer.sparsity_analysis(campaign_name=campaign_name)
-            if not sparsity_df.empty:
-                display(sparsity_df.head(10))
-                fig = self.analyzer.plot_sparsity_analysis(campaign_name=campaign_name)
-                if fig:
-                    display(fig)
-            else:
-                print("No data available")
+            if experiments:
+                completed = [e for e in experiments if e['status'] == 'completed']
+                
+                if completed:
+                    # Best result
+                    best = max(completed, key=lambda x: x['metrics'].get('top_1_accuracy', 0))
+                    print(f"\nBest Result:")
+                    print(f"  {best['name']}")
+                    print(f"  Top-1 Accuracy: {best['metrics'].get('top_1_accuracy', 0):.4f}")
     
-    def _apply_filters(self, button):
-        """Apply filters and display database table."""
-        experiments = self.tracker.get_all_experiments(status='completed')
-        
-        # Apply filters
-        probe_filter = self.filter_probe_text.value.strip()
-        model_filter = self.filter_model_text.value.strip()
-        min_acc = self.filter_min_acc_text.value
-        
-        filtered = []
-        for exp in experiments:
-            if probe_filter and probe_filter.lower() not in exp['probe_type'].lower():
-                continue
-            if model_filter and model_filter.lower() not in exp['model_type'].lower():
-                continue
-            if min_acc > 0:
-                acc = exp['metrics'].get('top_1_accuracy', 0.0)
-                if acc < min_acc:
-                    continue
-            filtered.append(exp)
-        
-        # Sort
-        sort_by = self.sort_dropdown.value
-        if sort_by == 'timestamp':
-            filtered.sort(key=lambda e: e['timestamp'], reverse=True)
-        elif sort_by == 'top_1_accuracy':
-            filtered.sort(key=lambda e: e['metrics'].get('top_1_accuracy', 0.0), reverse=True)
-        elif sort_by == 'training_time_seconds':
-            filtered.sort(key=lambda e: e['training_time_seconds'])
-        
-        # Build table
-        rows = []
-        for exp in filtered[:50]:  # Limit to 50 rows
-            rows.append({
-                'ID': exp['id'],
-                'Name': exp['name'][:40],
-                'Probe': exp['probe_type'],
-                'Model': exp['model_type'],
-                'M': exp['M'],
-                'K': exp['K'],
-                'Accuracy': f"{exp['metrics'].get('top_1_accuracy', 0.0):.3f}",
-                'Time': f"{exp['training_time_seconds']:.1f}s",
-                'Timestamp': exp['timestamp'][:16],
-            })
-        
-        with self.db_table_output:
-            clear_output(wait=True)
-            if rows:
-                df = pd.DataFrame(rows)
-                display(HTML(f"<p>Showing {len(rows)} of {len(filtered)} experiments (top 50)</p>"))
-                display(df)
-            else:
-                print("No experiments match the filters")
-    
-    def _export_csv(self, button):
-        """Export experiments to CSV."""
+    def _refresh_campaigns(self, btn):
+        """Refresh campaign list."""
+        # Get all campaigns by querying database directly
         try:
-            output_path = f"outputs/experiments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            self.tracker.export_to_csv(output_path)
-            
-            with self.db_table_output:
-                print(f"\n✅ Exported to {output_path}")
-        except Exception as e:
-            with self.db_table_output:
-                print(f"\n❌ Export failed: {e}")
-    
-    def _export_json(self, button):
-        """Export experiments to JSON."""
-        import json
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name FROM campaigns ORDER BY timestamp DESC LIMIT 50")
+            rows = cursor.fetchall()
+            campaigns = [dict(row) for row in rows]
+            conn.close()
+        except sqlite3.Error:
+            campaigns = []
         
-        try:
-            experiments = self.tracker.get_all_experiments()
-            
-            output_path = f"outputs/experiments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            
-            with open(output_path, 'w') as f:
-                json.dump(experiments, f, indent=2)
-            
-            with self.db_table_output:
-                print(f"\n✅ Exported to {output_path}")
-        except Exception as e:
-            with self.db_table_output:
-                print(f"\n❌ Export failed: {e}")
-    
-    def _update_db_stats(self):
-        """Update database statistics."""
-        experiments = self.tracker.get_all_experiments()
+        options = [(f"ID {c['id']}: {c['name'][:40]}", c['id']) 
+                  for c in campaigns]
         
-        if not experiments:
-            self.db_stats_html.value = "<i>No experiments in database</i>"
+        self.campaign_selector.options = options
+        
+        if btn is not None:
+            with self.analysis_output:
+                clear_output(wait=True)
+                print(f"Refreshed - {len(campaigns)} campaigns found")
+    
+    def _plot_comparison(self, btn):
+        """Plot comparison for selected campaign."""
+        campaign_id = self.campaign_selector.value
+        if campaign_id is None:
+            with self.analysis_output:
+                print("No campaign selected")
             return
         
-        total = len(experiments)
-        completed = len([e for e in experiments if e['status'] == 'completed'])
-        failed = len([e for e in experiments if e['status'] == 'failed'])
+        metric = self.metric_dropdown.value
         
-        # Find best
-        best = self.tracker.get_best_experiment()
+        with self.analysis_output:
+            clear_output(wait=True)
+            
+            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
+            completed = [e for e in experiments if e['status'] == 'completed']
+            
+            if not completed:
+                print("No completed experiments in campaign")
+                return
+            
+            # Bar chart
+            data = [(e['name'][:20], e['metrics'].get(metric, 0)) 
+                   for e in completed]
+            names, values = zip(*data)
+            
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            bars = ax.bar(range(len(names)), values)
+            ax.set_xticks(range(len(names)))
+            ax.set_xticklabels(names, rotation=45, ha='right')
+            ax.set_ylabel(metric.replace('_', ' ').title())
+            ax.set_title(f'{campaign["name"]} - {metric.replace("_", " ").title()}')
+            ax.grid(True, axis='y', alpha=0.3)
+            
+            # Color bars
+            colors = plt.cm.viridis(np.linspace(0, 1, len(bars)))
+            for bar, color in zip(bars, colors):
+                bar.set_color(color)
+            
+            plt.tight_layout()
+            plt.show()
+    
+    def _export_results(self, btn):
+        """Export analysis results."""
+        campaign_id = self.campaign_selector.value
+        if campaign_id is None:
+            with self.analysis_output:
+                print("No campaign selected")
+            return
         
-        stats_html = f"""
-        <div style='padding: 10px; background-color: #f0f0f0; border-radius: 5px;'>
-            <h4>Database Statistics</h4>
-            <ul>
-                <li><b>Total Experiments:</b> {total}</li>
-                <li><b>Completed:</b> {completed}</li>
-                <li><b>Failed:</b> {failed}</li>
-                {f"<li><b>Best Result:</b> {best['name']} ({best['metrics'].get('top_1_accuracy', 0.0):.3f})</li>" if best else ""}
-            </ul>
-        </div>
-        """
+        with self.analysis_output:
+            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
+            
+            # Create DataFrame
+            data = []
+            for exp in experiments:
+                row = {
+                    'id': exp['id'],
+                    'name': exp['name'],
+                    'probe': exp['probe_type'],
+                    'model': exp['model_type'],
+                    'M': exp['M'],
+                    'K': exp['K'],
+                    'status': exp['status']
+                }
+                row.update(exp['metrics'])
+                data.append(row)
+            
+            df = pd.DataFrame(data)
+            
+            filename = f"{campaign['name']}_results.csv"
+            df.to_csv(filename, index=False)
+            
+            print(f"✓ Exported to {filename}")
+    
+    def _apply_filter(self, btn):
+        """Apply database filters."""
+        with self.db_output:
+            clear_output(wait=True)
+            
+            campaign = self.filter_campaign.value or None
+            status = self.filter_status.value if self.filter_status.value != 'all' else None
+            limit = self.filter_limit.value
+            
+            experiments = self.tracker.get_all_experiments(
+                campaign_name=campaign,
+                status=status,
+                limit=limit
+            )
+            
+            # Display as table
+            if not experiments:
+                print("No experiments found")
+                return
+            
+            data = []
+            for exp in experiments:
+                data.append({
+                    'ID': exp['id'],
+                    'Name': exp['name'][:30],
+                    'Probe': exp['probe_type'],
+                    'Model': exp['model_type'],
+                    'M': exp['M'],
+                    'K': exp['K'],
+                    'Top-1': f"{exp['metrics'].get('top_1_accuracy', 0):.3f}",
+                    'Status': exp['status']
+                })
+            
+            df = pd.DataFrame(data)
+            print(df.to_string(index=False))
+            print(f"\nShowing {len(df)} of {len(experiments)} experiments")
+    
+    def _export_database(self, format: str):
+        """Export database to CSV or JSON."""
+        with self.db_output:
+            experiments = self.tracker.get_all_experiments(limit=1000)
+            
+            if format == 'csv':
+                data = []
+                for exp in experiments:
+                    row = {
+                        'id': exp['id'],
+                        'name': exp['name'],
+                        'probe': exp['probe_type'],
+                        'model': exp['model_type'],
+                        'M': exp['M'],
+                        'K': exp['K'],
+                        'status': exp['status'],
+                        'timestamp': exp['timestamp']
+                    }
+                    row.update(exp['metrics'])
+                    data.append(row)
+                
+                df = pd.DataFrame(data)
+                filename = f"experiments_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+                df.to_csv(filename, index=False)
+                print(f"✓ Exported {len(df)} experiments to {filename}")
+                
+            elif format == 'json':
+                filename = f"experiments_{time.strftime('%Y%m%d_%H%M%S')}.json"
+                with open(filename, 'w') as f:
+                    json.dump(experiments, f, indent=2)
+                print(f"✓ Exported {len(experiments)} experiments to {filename}")
+    
+    def display(self):
+        """Display the dashboard interface."""
+        # Tab 1: Configure
+        tab1 = widgets.VBox([
+            widgets.HTML('<h3>System Parameters</h3>'),
+            self.N_slider,
+            self.K_slider,
+            self.M_slider,
+            self.freq_slider,
+            self.snr_slider,
+            widgets.HTML('<h3>Algorithm Selection</h3>'),
+            self.probe_dropdown,
+            self.model_dropdown,
+            widgets.HTML('<h3>Training Parameters</h3>'),
+            self.epochs_slider,
+            self.lr_dropdown,
+            self.batch_slider,
+            widgets.HTML('<h3>Queue Management</h3>'),
+            widgets.HBox([self.add_queue_btn, self.view_queue_btn, self.clear_queue_btn]),
+            self.queue_output
+        ])
         
-        self.db_stats_html.value = stats_html
+        # Tab 2: Run
+        tab2 = widgets.VBox([
+            widgets.HTML('<h3>Run Experiments</h3>'),
+            widgets.HBox([self.run_single_btn, self.run_queue_btn, 
+                         self.run_search_btn, self.stop_btn]),
+            self.progress_bar,
+            self.status_text,
+            widgets.HTML('<hr>'),
+            self.run_output
+        ])
+        
+        # Tab 3: Results
+        tab3 = widgets.VBox([
+            widgets.HTML('<h3>Experiment Results</h3>'),
+            widgets.HBox([self.exp_selector, self.refresh_exp_btn]),
+            widgets.HTML('<hr>'),
+            self.results_output
+        ])
+        
+        # Tab 4: Analysis
+        tab4 = widgets.VBox([
+            widgets.HTML('<h3>Campaign Analysis</h3>'),
+            widgets.HBox([self.campaign_selector, self.refresh_camp_btn]),
+            self.metric_dropdown,
+            widgets.HBox([self.plot_comparison_btn, self.export_btn]),
+            widgets.HTML('<hr>'),
+            self.analysis_output
+        ])
+        
+        # Tab 5: Database
+        tab5 = widgets.VBox([
+            widgets.HTML('<h3>Database Explorer</h3>'),
+            widgets.HBox([self.filter_campaign, self.filter_status, self.filter_limit]),
+            self.apply_filter_btn,
+            widgets.HBox([self.export_csv_btn, self.export_json_btn]),
+            widgets.HTML('<hr>'),
+            self.db_output
+        ])
+        
+        # Create tabs
+        tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4, tab5])
+        tabs.set_title(0, 'Configure')
+        tabs.set_title(1, 'Run')
+        tabs.set_title(2, 'Results')
+        tabs.set_title(3, 'Analysis')
+        tabs.set_title(4, 'Database')
+        
+        # Display
+        display(widgets.VBox([
+            widgets.HTML('<h2>🔬 RIS Auto-Research Engine Dashboard</h2>'),
+            tabs
+        ]))

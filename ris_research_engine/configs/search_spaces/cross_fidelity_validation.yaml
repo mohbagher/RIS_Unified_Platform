@@ -1,0 +1,138 @@
+# ============================================================================
+# Cross-Fidelity Validation Search Space
+# ============================================================================
+# Validate top-performing configurations from synthetic experiments on
+# high-fidelity Sionna ray-tracing simulation data.
+#
+# Purpose: Ensure that insights from fast synthetic data transfer to
+# realistic wireless propagation scenarios.
+#
+# Workflow:
+# 1. Run probe_comparison, model_comparison, or full_search on synthetic data
+# 2. Identify top 3 configurations
+# 3. Use this config to validate on Sionna HDF5 data
+# 4. Compare synthetic vs. real-world performance
+#
+# Total Experiments: 3 (top 3 configs from previous search)
+# ============================================================================
+
+name: "cross_fidelity_validation"
+description: "Validate synthetic results on Sionna ray-tracing data"
+strategy: "grid_search"
+
+# Source of previous experiments
+source_experiments:
+  experiment_name: "probe_comparison"  # Or "model_comparison", "full_search"
+  select_top_n: 3
+  metric: "top_1_accuracy"
+  source_db: "results.db"
+
+# High-fidelity data configuration
+data:
+  data_source: "hdf5"
+  hdf5_file: "outputs/sionna_ris_data.h5"  # Path to Sionna data
+  num_samples: null  # Use all available samples from HDF5
+  preload: true      # Load entire dataset into memory
+
+# System configuration (must match Sionna data generation)
+system:
+  N: 64
+  K: 64
+  M: 8
+  frequency: 28e9
+  snr_db: 20.0
+  # Additional Sionna-specific parameters
+  carrier_frequency: 28e9
+  num_paths: 10
+  scenario: "umi"  # Urban Micro (or "uma", "rma")
+
+# Configurations to validate (populated from top experiments)
+# These are examples - actual values come from source_experiments
+validation_configs:
+  - name: "config_1_from_synthetic"
+    probe:
+      type: "hadamard"
+    model:
+      type: "mlp"
+      hidden_dims: [256, 128, 64]
+      dropout: 0.1
+  
+  - name: "config_2_from_synthetic"
+    probe:
+      type: "dft_beams"
+    model:
+      type: "transformer"
+      d_model: 128
+      nhead: 4
+      num_layers: 3
+      dropout: 0.1
+  
+  - name: "config_3_from_synthetic"
+    probe:
+      type: "sobol"
+    model:
+      type: "cnn_1d"
+      num_filters: [64, 128, 64]
+      kernel_size: 3
+      dropout: 0.1
+
+# Training configuration
+training:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 100
+  early_stopping_patience: 15
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  val_split: 0.15
+  test_split: 0.15
+  scheduler: "cosine"
+
+# Random seeds (same as source experiments for fair comparison)
+random_seeds: [42, 43, 44]
+
+# Metrics
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "top_5_accuracy"
+    - "val_loss"
+    - "test_loss"
+    - "training_time"
+    - "inference_time"
+
+# Comparison analysis
+comparison:
+  compute_fidelity_gap: true  # |accuracy_sionna - accuracy_synthetic|
+  plot_correlation: true       # Scatter plot of synthetic vs. Sionna results
+  statistical_test: "paired_t_test"  # Test if gap is significant
+  
+  acceptance_criteria:
+    max_accuracy_drop: 0.10     # Accept if Sionna accuracy >= synthetic - 10%
+    min_correlation: 0.7        # Accept if correlation >= 0.7
+    rank_preservation: true     # Accept if relative ranking preserved
+
+# Scientific rules
+rules:
+  early_stopping: true
+  min_epochs: 20  # Higher minimum for real data
+
+# Output
+output:
+  save_models: true
+  save_predictions: true  # Save predictions for analysis
+  generate_comparison_report: true
+  plot_results: true
+
+# Validation report
+report:
+  include_sections:
+    - "fidelity_gap_analysis"
+    - "rank_correlation"
+    - "per_config_comparison"
+    - "recommendations"
+  
+  recommendations:
+    high_fidelity_gap: "Re-tune hyperparameters on Sionna data"
+    low_correlation: "Investigate distribution mismatch"
+    rank_change: "Synthetic insights may not transfer - use caution"
