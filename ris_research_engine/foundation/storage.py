@@ -382,6 +382,122 @@ class ResultTracker:
             'comparison': comparison
         }
     
+    
+    def get_result(self, experiment_id: int) -> Optional[ExperimentResult]:
+        """
+        Retrieve an experiment result by ID as ExperimentResult object.
+        
+        Args:
+            experiment_id: Database ID of the experiment
+            
+        Returns:
+            ExperimentResult object, or None if not found
+        """
+        exp_dict = self.get_experiment(experiment_id)
+        if exp_dict is None:
+            return None
+        
+        # Convert dict to ExperimentResult
+        config = ExperimentConfig.from_dict(exp_dict['full_config'])
+        
+        # Get training history
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT metric_name, epoch, metric_value
+                FROM training_history
+                WHERE experiment_id = ?
+                ORDER BY epoch, metric_name
+            """, (experiment_id,))
+            
+            history = {}
+            for row in cursor.fetchall():
+                metric_name = row['metric_name']
+                if metric_name not in history:
+                    history[metric_name] = []
+                history[metric_name].append(row['metric_value'])
+        
+        return ExperimentResult(
+            config=config,
+            metrics=exp_dict['metrics'],
+            training_history=history,
+            best_epoch=exp_dict['best_epoch'],
+            total_epochs=exp_dict['total_epochs'],
+            training_time_seconds=exp_dict['training_time_seconds'],
+            model_parameters=exp_dict['model_parameters'],
+            timestamp=exp_dict['timestamp'],
+            status=exp_dict['status'],
+            error_message=exp_dict.get('error_message', ''),
+            baseline_results=exp_dict['baseline_results'],
+            primary_metric_name=list(exp_dict['metrics'].keys())[0] if exp_dict['metrics'] else 'top_1_accuracy',
+            primary_metric_value=list(exp_dict['metrics'].values())[0] if exp_dict['metrics'] else 0.0
+        )
+    
+    def get_all_results(
+        self,
+        campaign_name: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> List[ExperimentResult]:
+        """
+        Retrieve all experiments as ExperimentResult objects.
+        
+        Args:
+            campaign_name: Filter by campaign name
+            status: Filter by status ('completed', 'failed', 'pruned')
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of ExperimentResult objects
+        """
+        experiments = self.get_all_experiments(
+            campaign_name=campaign_name,
+            status=status,
+            limit=limit
+        )
+        
+        results = []
+        for exp_dict in experiments:
+            # Convert dict to ExperimentResult
+            config = ExperimentConfig.from_dict(exp_dict['full_config'])
+            
+            # Get training history for this experiment
+            exp_id = exp_dict['id']
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT metric_name, epoch, metric_value
+                    FROM training_history
+                    WHERE experiment_id = ?
+                    ORDER BY epoch, metric_name
+                """, (exp_id,))
+                
+                history = {}
+                for row in cursor.fetchall():
+                    metric_name = row['metric_name']
+                    if metric_name not in history:
+                        history[metric_name] = []
+                    history[metric_name].append(row['metric_value'])
+            
+            result = ExperimentResult(
+                config=config,
+                metrics=exp_dict['metrics'],
+                training_history=history,
+                best_epoch=exp_dict['best_epoch'],
+                total_epochs=exp_dict['total_epochs'],
+                training_time_seconds=exp_dict['training_time_seconds'],
+                model_parameters=exp_dict['model_parameters'],
+                timestamp=exp_dict['timestamp'],
+                status=exp_dict['status'],
+                error_message='',
+                baseline_results=exp_dict['baseline_results'],
+                primary_metric_name=list(exp_dict['metrics'].keys())[0] if exp_dict['metrics'] else 'top_1_accuracy',
+                primary_metric_value=list(exp_dict['metrics'].values())[0] if exp_dict['metrics'] else 0.0
+            )
+            results.append(result)
+        
+        return results
+    
     def save_campaign(self, campaign: SearchCampaignResult) -> int:
         """Save a search campaign result.
         
