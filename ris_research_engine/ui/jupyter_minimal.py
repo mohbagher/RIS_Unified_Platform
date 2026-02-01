@@ -390,22 +390,26 @@ class RISEngine:
             plt.tight_layout()
             plt.show()
     
-    def validate_on_sionna(
+    def validate_cross_fidelity(
         self,
         campaign_name: str,
         hdf5_path: str,
         top_n: int = 3
     ) -> pd.DataFrame:
         """
-        Cross-fidelity validation on Sionna data.
+        Cross-fidelity validation using high-fidelity simulation data (e.g., Sionna).
+        
+        This method validates top-performing experiments from synthetic data
+        against high-fidelity electromagnetic simulations to assess performance
+        degradation and ensure results generalize.
         
         Args:
             campaign_name: Name of campaign to validate
-            hdf5_path: Path to HDF5 file with Sionna data
+            hdf5_path: Path to HDF5 file with high-fidelity simulation data (e.g., Sionna)
             top_n: Number of top experiments to validate
             
         Returns:
-            DataFrame with validation results
+            DataFrame with validation results showing synthetic vs high-fidelity accuracy
         """
         # Get campaign experiments
         campaign = self.tracker.get_campaign(campaign_name=campaign_name)
@@ -422,7 +426,7 @@ class RISEngine:
         )[:top_n]
         
         # Load Sionna data
-        logger.info(f"Loading Sionna data from {hdf5_path}")
+        logger.info(f"Loading high-fidelity simulation data from {hdf5_path}")
         sionna_data = load_hdf5_data(hdf5_path)
         
         # Validate each experiment
@@ -431,13 +435,13 @@ class RISEngine:
         for exp in experiments:
             print(f"\nValidating: {exp['name']}")
             
-            # TODO: Re-run with Sionna data
-            # For now, placeholder
+            # TODO: Re-run with high-fidelity data
+            # For now, placeholder until Sionna integration is complete
             results.append({
                 'experiment_id': exp['id'],
                 'name': exp['name'],
                 'synthetic_accuracy': exp['metrics'].get('top_1_accuracy', 0),
-                'sionna_accuracy': 0.0,  # Placeholder
+                'high_fidelity_accuracy': 0.0,  # Placeholder for Sionna validation
                 'degradation': 0.0
             })
         

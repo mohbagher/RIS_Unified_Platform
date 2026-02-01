@@ -5,6 +5,7 @@ from IPython.display import display, clear_output
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
@@ -488,8 +489,6 @@ class RISDashboard:
     def _refresh_campaigns(self, btn):
         """Refresh campaign list."""
         # Get all campaigns by querying database directly
-        import sqlite3
-        
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row

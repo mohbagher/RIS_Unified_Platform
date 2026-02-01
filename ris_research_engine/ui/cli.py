@@ -13,9 +13,11 @@ try:
     from rich.progress import Progress
     from rich import print as rprint
     RICH_AVAILABLE = True
+    console = Console()
 except ImportError:
     RICH_AVAILABLE = False
-    Console = None
+    console = None
+    Table = None
 
 from ris_research_engine.foundation import (
     SystemConfig, TrainingConfig, ExperimentConfig, ResultTracker
@@ -231,8 +233,7 @@ def cmd_list(args):
     # Display table
     print_output(f"\n📊 Found {len(experiments)} experiments:", "bold blue")
     
-    if RICH_AVAILABLE:
-        console = Console()
+    if RICH_AVAILABLE and console:
         table = Table(title="Experiments")
         table.add_column("ID", style="cyan")
         table.add_column("Name", style="white")
