@@ -1,0 +1,74 @@
+# ============================================================================
+# Probe Comparison Search Space
+# ============================================================================
+# Systematic comparison of 6 probe design strategies to identify which
+# training signal types enable the best beam prediction accuracy.
+#
+# Research Question: Which probe type provides the most informative
+# training signals for RIS beam prediction?
+#
+# Total Experiments: 18 (6 probes × 3 seeds)
+# ============================================================================
+
+name: "probe_comparison"
+description: "Compare effectiveness of 6 probe types for RIS beam prediction"
+strategy: "grid_search"
+
+# Fixed system configuration
+system:
+  N: 64  # Total RIS elements
+  K: 64  # Number of candidate beams
+  M: 8   # Number of measurement probes
+  frequency: 28e9  # 28 GHz mmWave
+  snr_db: 20.0
+
+# Probe types to compare
+probes:
+  type:
+    - "random_uniform"    # Uniform random phase [0, 2π]
+    - "random_binary"     # Binary random phase {0, π}
+    - "hadamard"          # Hadamard codebook (orthogonal)
+    - "dft_beams"         # DFT beam codebook
+    - "sobol"             # Quasi-random Sobol sequence
+    - "halton"            # Quasi-random Halton sequence
+
+# Fixed model configuration
+model:
+  type: "mlp"
+  hidden_dims: [256, 128, 64]
+  activation: "relu"
+  dropout: 0.1
+
+# Training configuration
+training:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 100
+  early_stopping_patience: 15
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  val_split: 0.15
+  test_split: 0.15
+
+# Data generation
+data:
+  num_samples: 10000
+  data_source: "synthetic"
+
+# Random seeds for statistical significance
+random_seeds: [42, 43, 44]
+
+# Metrics to track
+metrics:
+  primary: "top_1_accuracy"
+  secondary:
+    - "top_5_accuracy"
+    - "val_loss"
+    - "train_loss"
+    - "training_time"
+
+# Scientific rules
+rules:
+  early_stopping: true
+  abandon_threshold: 0.016  # 1/K baseline for K=64
+  min_epochs: 10
