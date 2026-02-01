@@ -409,6 +409,11 @@ class ExperimentRunner:
         predictions = np.concatenate(all_predictions)
         probs = np.concatenate(all_probs)
         
+        # Convert to torch tensors for metrics
+        probs_tensor = torch.FloatTensor(probs)
+        targets_tensor = torch.LongTensor(targets)
+        powers_tensor = torch.FloatTensor(powers)
+        
         # Compute metrics
         metrics = {}
         
@@ -416,29 +421,73 @@ class ExperimentRunner:
         for k in [1, 3, 5]:
             if k <= config.system.K:
                 top_k_acc = TopKAccuracy(k=k)
-                metrics[f'top_{k}_accuracy'] = top_k_acc.compute(probs, targets, powers)
+                metrics[f'top_{k}_accuracy'] = top_k_acc.compute(probs_tensor, targets_tensor, powers_tensor)
         
         # Hit@L
         for l in [1, 3, 5]:
             if l <= config.system.K:
-                hit_at_l = HitAtL(l=l)
-                metrics[f'hit_at_{l}'] = hit_at_l.compute(probs, targets, powers)
+                hit_at_l = HitAtL(L=l)  # Use capital L
+                metrics[f'hit_at_{l}'] = hit_at_l.compute(probs_tensor, targets_tensor, powers_tensor)
         
         # Mean reciprocal rank
         mrr = MeanReciprocalRank()
-        metrics['mean_reciprocal_rank'] = mrr.compute(probs, targets, powers)
+        metrics['mean_reciprocal_rank'] = mrr.compute(probs_tensor, targets_tensor, powers_tensor)
         
-        # Power ratio
-        power_ratio = PowerRatio()
-        metrics['power_ratio'] = power_ratio.compute(probs, targets, powers)
+        # Power ratio - compute from predictions and power matrix
+        # Get achieved powers by selecting predicted configurations
+        achieved_powers = []
+        optimal_powers = []
+        for i, pred_idx in enumerate(predictions):
+            achieved_powers.append(powers[i, pred_idx])
+            optimal_powers.append(powers[i, targets[i]])
         
-        # Spectral efficiency
-        spec_eff = SpectralEfficiency()
-        metrics['spectral_efficiency'] = spec_eff.compute(probs, targets, powers)
+        achieved_powers_tensor = torch.FloatTensor(achieved_powers)
+        optimal_powers_tensor = torch.FloatTensor(optimal_powers)
         
-        # Inference time
-        inf_time = InferenceTime()
-        inference_time_ms = inf_time.compute(model, loader, device)
+        # Avoid division by zero
+        epsilon = 1e-10
+        optimal_powers_tensor = optimal_powers_tensor.clamp(min=epsilon)
+        power_ratio = (achieved_powers_tensor / optimal_powers_tensor).mean().item()
+        metrics['power_ratio'] = power_ratio
+        
+        # Spectral efficiency - compute from power ratios
+        # SE ~ log2(1 + SNR * power_ratio)
+        snr_linear = 10 ** (config.system.snr_db / 10.0)
+        spectral_eff = torch.log2(1 + snr_linear * achieved_powers_tensor / optimal_powers_tensor).mean().item()
+        metrics['spectral_efficiency'] = spectral_eff
+        
+        # Inference time - measure directly
+        # Get a sample input from the loader
+        sample_input, _ = next(iter(loader))
+        sample_input = sample_input[:1].to(device)  # Take first sample only
+        
+        # Measure inference time
+        model.eval()
+        num_warmup = 10
+        num_iterations = 100
+        
+        # Warmup
+        with torch.no_grad():
+            for _ in range(num_warmup):
+                _ = model(sample_input)
+        
+        # Synchronize if using CUDA
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        
+        # Measure
+        import time
+        start_time = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(num_iterations):
+                _ = model(sample_input)
+        
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        
+        end_time = time.perf_counter()
+        elapsed_time_s = end_time - start_time
+        inference_time_ms = (elapsed_time_s / num_iterations) * 1000
         metrics['inference_time_ms'] = inference_time_ms
         
         return metrics
