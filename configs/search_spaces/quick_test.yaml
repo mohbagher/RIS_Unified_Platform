@@ -1,0 +1,47 @@
+# Quick Test Campaign
+# Minimal configuration for testing the system (~1-2 minutes)
+
+campaign_name: "Quick Test"
+
+# Search space
+search_space:
+  # System parameters (fixed for quick test)
+  system:
+    N: 64
+    K: 64
+    M: [4, 8]  # Test 2 sparsity levels
+    frequency: 28e9
+    snr_db: 20
+  
+  # Probe types to test
+  probes:
+    - random_uniform
+    - hadamard
+  
+  # Models to test
+  models:
+    - mlp
+  
+  # Training configuration (reduced for speed)
+  training:
+    learning_rate: 0.001
+    batch_size: 64
+    max_epochs: 10  # Very short training
+    early_stopping_patience: 5
+  
+  # Data configuration (minimal samples)
+  data:
+    source: synthetic_rayleigh
+    n_train: 500
+    n_val: 100
+    n_test: 100
+
+# Search strategy
+strategy: grid_search
+
+# Metrics to track
+metrics:
+  - top_1_accuracy
+  - hit_at_1
+  - power_ratio
+  - inference_time_ms
