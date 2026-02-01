@@ -373,11 +373,11 @@ class ResultAnalyzer:
             
             # Find matching high-fidelity result
             matches = high_fidelity_df[
-                high_fidelity_df['name'].str.contains(base_name, regex=False) |
-                (high_fidelity_df['probe_type'] == synth_row['probe_type']) &
+                (high_fidelity_df['name'].str.contains(base_name, regex=False)) |
+                ((high_fidelity_df['probe_type'] == synth_row['probe_type']) &
                 (high_fidelity_df['model_type'] == synth_row['model_type']) &
                 (high_fidelity_df['M'] == synth_row['M']) &
-                (high_fidelity_df['K'] == synth_row['K'])
+                (high_fidelity_df['K'] == synth_row['K']))
             ]
             
             if not matches.empty:

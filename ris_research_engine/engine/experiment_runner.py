@@ -221,32 +221,32 @@ class ExperimentRunner:
     
     def _train_model(
         self, model: nn.Module, train_loader: DataLoader,
-        val_loader: DataLoader, config: TrainingConfig, device: torch.device
+        val_loader: DataLoader, training_config: TrainingConfig, device: torch.device
     ) -> tuple:
         """Train the model with early stopping and learning rate scheduling."""
         # Setup optimizer
-        if config.optimizer == 'adam':
-            optimizer = optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-        elif config.optimizer == 'adamw':
-            optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        if training_config.optimizer == 'adam':
+            optimizer = optim.Adam(model.parameters(), lr=training_config.learning_rate, weight_decay=training_config.weight_decay)
+        elif training_config.optimizer == 'adamw':
+            optimizer = optim.AdamW(model.parameters(), lr=training_config.learning_rate, weight_decay=training_config.weight_decay)
         else:  # sgd
-            optimizer = optim.SGD(model.parameters(), lr=config.learning_rate, 
-                                 weight_decay=config.weight_decay, momentum=0.9)
+            optimizer = optim.SGD(model.parameters(), lr=training_config.learning_rate, 
+                                 weight_decay=training_config.weight_decay, momentum=0.9)
         
         # Setup loss function
-        if config.loss_function == 'cross_entropy':
+        if training_config.loss_function == 'cross_entropy':
             criterion = nn.CrossEntropyLoss()
-        elif config.loss_function == 'mse':
+        elif training_config.loss_function == 'mse':
             criterion = nn.MSELoss()
         else:  # mae
             criterion = nn.L1Loss()
         
         # Setup learning rate scheduler
-        if config.scheduler == 'cosine':
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.max_epochs)
-        elif config.scheduler == 'step':
+        if training_config.scheduler == 'cosine':
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=training_config.max_epochs)
+        elif training_config.scheduler == 'step':
             scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-        elif config.scheduler == 'plateau':
+        elif training_config.scheduler == 'plateau':
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5)
         else:
             scheduler = None
@@ -261,7 +261,7 @@ class ExperimentRunner:
         best_epoch = 0
         patience_counter = 0
         
-        for epoch in range(config.max_epochs):
+        for epoch in range(training_config.max_epochs):
             # Training phase
             model.train()
             train_loss = 0.0
@@ -272,7 +272,7 @@ class ExperimentRunner:
                 outputs = model(inputs)
                 
                 # Handle target shape for loss
-                if config.loss_function == 'cross_entropy':
+                if training_config.loss_function == 'cross_entropy':
                     if targets.dim() > 1:
                         targets = targets.argmax(dim=1)
                 
@@ -280,7 +280,8 @@ class ExperimentRunner:
                 loss.backward()
                 
                 # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                if training_config.gradient_clip_max_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=training_config.gradient_clip_max_norm)
                 
                 optimizer.step()
                 train_loss += loss.item()
@@ -300,7 +301,7 @@ class ExperimentRunner:
                     
                     # Handle target shape for loss
                     targets_for_loss = targets
-                    if config.loss_function == 'cross_entropy':
+                    if training_config.loss_function == 'cross_entropy':
                         if targets.dim() > 1:
                             targets_for_loss = targets.argmax(dim=1)
                     
@@ -308,7 +309,7 @@ class ExperimentRunner:
                     val_loss += loss.item()
                     
                     # Calculate accuracy
-                    if config.loss_function == 'cross_entropy':
+                    if training_config.loss_function == 'cross_entropy':
                         _, predicted = outputs.max(1)
                         if targets.dim() > 1:
                             targets = targets.argmax(dim=1)
@@ -325,7 +326,7 @@ class ExperimentRunner:
             
             # Learning rate scheduling
             if scheduler is not None:
-                if config.scheduler == 'plateau':
+                if training_config.scheduler == 'plateau':
                     scheduler.step(val_loss)
                 else:
                     scheduler.step()
@@ -338,13 +339,13 @@ class ExperimentRunner:
             else:
                 patience_counter += 1
             
-            if patience_counter >= config.early_stopping_patience:
+            if patience_counter >= training_config.early_stopping_patience:
                 logger.info(f"Early stopping at epoch {epoch+1}")
                 break
             
             # Log progress every 10 epochs
             if (epoch + 1) % 10 == 0:
-                logger.info(f"Epoch {epoch+1}/{config.max_epochs}: "
+                logger.info(f"Epoch {epoch+1}/{training_config.max_epochs}: "
                           f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
                           f"val_acc={val_accuracy:.4f}")
         

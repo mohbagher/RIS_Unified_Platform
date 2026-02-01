@@ -42,3 +42,6 @@ num_workers: 0
 
 # Device selection
 device: auto  # Options: 'auto', 'cuda', 'cpu'
+
+# Gradient clipping max norm (0 to disable)
+gradient_clip_max_norm: 1.0

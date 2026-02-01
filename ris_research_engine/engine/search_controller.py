@@ -238,8 +238,8 @@ class SearchController:
                 data_source=validation_fidelity,  # Change data source
                 data_params=validation_data_params or {},
                 metrics=original_result.config.metrics,
-                tags=original_result.config.tags + [f'validation:{validation_fidelity}'],
-                notes=f"Cross-fidelity validation of experiment ID {i}",
+                tags=original_result.config.tags + [f'validation:{validation_fidelity}', f'original_name:{original_result.config.name}'],
+                notes=f"Cross-fidelity validation of experiment: {original_result.config.name}",
                 data_fidelity=validation_fidelity
             )
             

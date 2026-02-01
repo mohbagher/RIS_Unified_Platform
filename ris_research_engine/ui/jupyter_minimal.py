@@ -1,6 +1,7 @@
 """Minimal Jupyter interface for RIS research engine."""
 
 import logging
+import math
 from typing import Dict, Any, List, Optional
 import matplotlib.pyplot as plt
 
@@ -69,7 +70,6 @@ class RISEngine:
             metrics = ['top_1_accuracy', 'power_ratio']
         
         # Compute N_x and N_y from N
-        import math
         N_x = int(math.sqrt(N))
         N_y = N_x
         if N_x * N_y != N:
