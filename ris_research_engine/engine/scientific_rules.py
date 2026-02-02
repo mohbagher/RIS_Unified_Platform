@@ -134,16 +134,6 @@ def evaluate_rule(rule: Dict[str, Any], context: Dict[str, Any]) -> bool:
     # Parse and evaluate condition
     try:
         result = _evaluate_condition(condition, context)
-        
-        # Apply threshold adjustment if present
-        if result and 'threshold' in rule:
-            # If the rule has a threshold, it typically means we need additional validation
-            # For example: "top_1_accuracy > baseline" with threshold 0.05
-            # means top_1_accuracy must be > baseline + 0.05
-            threshold = rule['threshold']
-            # This is handled in condition evaluation with modified comparison
-            pass
-            
         return result
         
     except Exception as e:

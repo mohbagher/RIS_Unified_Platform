@@ -12,7 +12,7 @@ from ris_research_engine.foundation import (
     ExperimentResult, SearchCampaignResult, ResultTracker
 )
 from ris_research_engine.foundation.logging_config import get_logger
-from ris_research_engine.plugins.search import get_strategy, list_strategies, SEARCH_STRATEGIES
+from ris_research_engine.plugins.search import get_strategy, SEARCH_STRATEGIES
 from .experiment_runner import ExperimentRunner
 from . import scientific_rules
 
@@ -137,7 +137,7 @@ class SearchController:
                 logger.info(f"Reached maximum experiments: {max_experiments}")
                 break
             
-            if max_time_seconds and (time.time() - start_time) > max_time_seconds:
+            if max_time_seconds and (time.time() - start_time) >= max_time_seconds:
                 logger.info(f"Reached maximum time: {max_time_seconds}s")
                 break
             
@@ -366,9 +366,11 @@ class SearchController:
         
         # Sort by primary metric (descending) to get top performers
         try:
+            # Use primary metric from first experiment, default to top_1_accuracy
+            primary_metric = experiments[0].get('primary_metric_name', 'top_1_accuracy') if experiments else 'top_1_accuracy'
             experiments_sorted = sorted(
                 experiments,
-                key=lambda x: x.get('metrics', {}).get('top_1_accuracy', 0.0),
+                key=lambda x: x.get('metrics', {}).get(primary_metric, 0.0),
                 reverse=True
             )
         except Exception as e:
@@ -450,11 +452,12 @@ class SearchController:
                 # Add failed entry with available data
                 try:
                     synthetic_metrics = exp.get('metrics', {})
+                    full_cfg = exp.get('full_config', {})
                     comparison_data.append({
                         'experiment_id': exp.get('id'),
-                        'probe_type': exp.get('probe_type', 'unknown'),
-                        'model_type': exp.get('model_type', 'unknown'),
-                        'M': exp.get('M', 0),
+                        'probe_type': full_cfg.get('probe_type', 'unknown'),
+                        'model_type': full_cfg.get('model_type', 'unknown'),
+                        'M': full_cfg.get('system', {}).get('M', 0),
                         'synthetic_top_1': synthetic_metrics.get('top_1_accuracy', 0.0),
                         'synthetic_top_5': synthetic_metrics.get('top_5_accuracy', 0.0),
                         'synthetic_top_10': synthetic_metrics.get('top_10_accuracy', 0.0),
