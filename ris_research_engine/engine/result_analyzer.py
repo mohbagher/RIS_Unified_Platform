@@ -3,9 +3,9 @@
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
-import logging
 
-from ris_research_engine.foundation import ResultTracker
+from ris_research_engine.foundation.storage import ResultTracker
+from ris_research_engine.foundation.data_types import ExperimentResult
 from ris_research_engine.foundation.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -14,153 +14,141 @@ logger = get_logger(__name__)
 class ResultAnalyzer:
     """Analyze and compare experiment results from database."""
     
-    def __init__(self, db_path: str = "results.db"):
+    def __init__(self, tracker: Optional[ResultTracker] = None, db_path: str = "results.db"):
         """
         Initialize the result analyzer.
         
         Args:
-            db_path: Path to SQLite database
+            tracker: Optional ResultTracker instance. If None, creates one with db_path
+            db_path: Path to SQLite database (used if tracker is None)
         """
-        self.db_path = db_path
-        self.tracker = ResultTracker(db_path)
+        self.tracker = tracker if tracker is not None else ResultTracker(db_path)
+        logger.info("ResultAnalyzer initialized")
     
-    def compare_probes(self, experiment_ids: List[int]) -> pd.DataFrame:
+    def compare_probes(self, metric: str = 'top_1_accuracy') -> pd.DataFrame:
         """
-        Compare different probe types across experiments.
+        Compare different probe types across all experiments.
         
         Args:
-            experiment_ids: List of experiment IDs to compare
+            metric: Metric to compare (default: 'top_1_accuracy')
             
         Returns:
-            DataFrame with probe comparison
+            DataFrame with probe_type as index and metric values
         """
-        logger.info(f"Comparing probes for {len(experiment_ids)} experiments")
+        logger.info(f"Comparing probes by metric: {metric}")
+        
+        experiments = self.tracker.get_all_experiments(status='completed')
+        
+        if not experiments:
+            logger.warning("No completed experiments found")
+            return pd.DataFrame()
         
         data = []
-        
-        for exp_id in experiment_ids:
-            exp = self.tracker.get_experiment(exp_id)
-            
-            if exp is None:
-                logger.warning(f"Experiment {exp_id} not found")
-                continue
-            
+        for exp in experiments:
             metrics = exp['metrics']
-            
             data.append({
-                'experiment_id': exp_id,
                 'probe_type': exp['probe_type'],
+                'model_type': exp['model_type'],
                 'M': exp['M'],
                 'K': exp['K'],
-                'model_type': exp['model_type'],
-                'top_1_accuracy': metrics.get('top_1_accuracy', 0.0),
-                'top_5_accuracy': metrics.get('top_5_accuracy', 0.0),
-                'top_10_accuracy': metrics.get('top_10_accuracy', 0.0),
-                'inference_time_ms': metrics.get('inference_time', 0.0),
-                'training_time_seconds': exp['training_time_seconds'],
-                'model_parameters': exp['model_parameters'],
-                'status': exp['status']
+                'sparsity_ratio': exp['M'] / exp['K'] if exp['K'] > 0 else 0.0,
+                metric: metrics.get(metric, 0.0),
+                'experiment_id': exp['id']
             })
         
         df = pd.DataFrame(data)
         
         if len(df) > 0:
-            # Add ranking columns
-            df['top_1_rank'] = df['top_1_accuracy'].rank(ascending=False)
-            df['efficiency_score'] = (
-                df['top_1_accuracy'] / (df['inference_time_ms'] + 1e-6)
-            )
+            # Create summary by probe type
+            summary = df.groupby('probe_type').agg({
+                metric: ['mean', 'std', 'min', 'max', 'count']
+            }).round(4)
+            summary.columns = ['_'.join(col).strip() for col in summary.columns.values]
+            
+            logger.info(f"Probe comparison complete: {len(df)} experiments analyzed")
+            return summary
         
         return df
     
-    def compare_models(self, experiment_ids: List[int]) -> pd.DataFrame:
+    def compare_models(self, metric: str = 'top_1_accuracy') -> pd.DataFrame:
         """
-        Compare different model architectures across experiments.
+        Compare different model architectures across all experiments.
         
         Args:
-            experiment_ids: List of experiment IDs to compare
+            metric: Metric to compare (default: 'top_1_accuracy')
             
         Returns:
-            DataFrame with model comparison
+            DataFrame with model_type as index and metric values
         """
-        logger.info(f"Comparing models for {len(experiment_ids)} experiments")
+        logger.info(f"Comparing models by metric: {metric}")
+        
+        experiments = self.tracker.get_all_experiments(status='completed')
+        
+        if not experiments:
+            logger.warning("No completed experiments found")
+            return pd.DataFrame()
         
         data = []
-        
-        for exp_id in experiment_ids:
-            exp = self.tracker.get_experiment(exp_id)
-            
-            if exp is None:
-                logger.warning(f"Experiment {exp_id} not found")
-                continue
-            
+        for exp in experiments:
             metrics = exp['metrics']
-            
             data.append({
-                'experiment_id': exp_id,
                 'model_type': exp['model_type'],
                 'probe_type': exp['probe_type'],
                 'M': exp['M'],
                 'K': exp['K'],
                 'model_parameters': exp['model_parameters'],
-                'top_1_accuracy': metrics.get('top_1_accuracy', 0.0),
-                'top_5_accuracy': metrics.get('top_5_accuracy', 0.0),
-                'top_10_accuracy': metrics.get('top_10_accuracy', 0.0),
-                'inference_time_ms': metrics.get('inference_time', 0.0),
-                'training_time_seconds': exp['training_time_seconds'],
-                'best_epoch': exp['best_epoch'],
-                'total_epochs': exp['total_epochs'],
-                'status': exp['status']
+                metric: metrics.get(metric, 0.0),
+                'experiment_id': exp['id']
             })
         
         df = pd.DataFrame(data)
         
         if len(df) > 0:
-            # Add efficiency metrics
-            df['params_per_accuracy'] = df['model_parameters'] / (df['top_1_accuracy'] + 1e-6)
-            df['accuracy_rank'] = df['top_1_accuracy'].rank(ascending=False)
+            # Create summary by model type
+            summary = df.groupby('model_type').agg({
+                metric: ['mean', 'std', 'min', 'max', 'count'],
+                'model_parameters': 'mean'
+            }).round(4)
+            summary.columns = ['_'.join(col).strip() for col in summary.columns.values]
+            
+            logger.info(f"Model comparison complete: {len(df)} experiments analyzed")
+            return summary
         
         return df
     
-    def sparsity_analysis(self, experiment_ids: List[int]) -> pd.DataFrame:
+    def sparsity_analysis(self) -> pd.DataFrame:
         """
-        Analyze the relationship between sparsity (M/K) and performance.
+        Analyze the relationship between sparsity (M/K ratio) and performance.
         
-        Args:
-            experiment_ids: List of experiment IDs to analyze
-            
         Returns:
-            DataFrame with sparsity analysis
+            DataFrame with sparsity analysis including M, K, sparsity_ratio, and metrics
         """
-        logger.info(f"Performing sparsity analysis for {len(experiment_ids)} experiments")
+        logger.info("Performing sparsity analysis")
+        
+        experiments = self.tracker.get_all_experiments(status='completed')
+        
+        if not experiments:
+            logger.warning("No completed experiments found")
+            return pd.DataFrame()
         
         data = []
-        
-        for exp_id in experiment_ids:
-            exp = self.tracker.get_experiment(exp_id)
-            
-            if exp is None:
-                logger.warning(f"Experiment {exp_id} not found")
-                continue
-            
+        for exp in experiments:
             metrics = exp['metrics']
             M = exp['M']
             K = exp['K']
             sparsity_ratio = M / K if K > 0 else 0.0
             
             data.append({
-                'experiment_id': exp_id,
+                'experiment_id': exp['id'],
+                'probe_type': exp['probe_type'],
+                'model_type': exp['model_type'],
                 'M': M,
                 'K': K,
                 'sparsity_ratio': sparsity_ratio,
-                'probe_type': exp['probe_type'],
-                'model_type': exp['model_type'],
                 'top_1_accuracy': metrics.get('top_1_accuracy', 0.0),
                 'top_5_accuracy': metrics.get('top_5_accuracy', 0.0),
                 'top_10_accuracy': metrics.get('top_10_accuracy', 0.0),
-                'power_ratio': metrics.get('power_ratio', 0.0),
-                'spectral_efficiency': metrics.get('spectral_efficiency', 0.0),
-                'status': exp['status']
+                'inference_time': metrics.get('inference_time', 0.0)
             })
         
         df = pd.DataFrame(data)
@@ -168,147 +156,80 @@ class ResultAnalyzer:
         if len(df) > 0:
             # Sort by sparsity ratio
             df = df.sort_values('sparsity_ratio')
+            logger.info(f"Sparsity analysis complete: {len(df)} experiments analyzed")
         
         return df
     
     def best_configuration(
         self, 
         metric: str = 'top_1_accuracy',
-        campaign_name: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        top_n: int = 1
+    ) -> List[ExperimentResult]:
         """
-        Find the best experiment configuration by a specific metric.
+        Find the best experiment configurations by a specific metric.
         
         Args:
             metric: Metric to optimize (default: 'top_1_accuracy')
-            campaign_name: Optional campaign name filter
+            top_n: Number of top configurations to return (default: 1)
             
         Returns:
-            Dictionary with best experiment details, or None if no experiments found
+            List of ExperimentResult objects for top configurations
         """
-        logger.info(f"Finding best configuration by {metric}")
+        logger.info(f"Finding top {top_n} configurations by {metric}")
         
-        experiments = self.tracker.get_all_experiments(
-            campaign_name=campaign_name,
-            status='completed'
-        )
+        experiments = self.tracker.get_all_experiments(status='completed')
         
         if not experiments:
             logger.warning("No completed experiments found")
-            return None
+            return []
         
-        # Find best by metric
-        best_exp = None
-        best_value = -float('inf')
-        
+        # Sort experiments by metric
+        experiments_with_metric = []
         for exp in experiments:
             metrics = exp['metrics']
             value = metrics.get(metric, 0.0)
-            
-            if value > best_value:
-                best_value = value
-                best_exp = exp
+            experiments_with_metric.append((value, exp))
         
-        if best_exp:
-            logger.info(
-                f"Best configuration: experiment_id={best_exp['id']}, "
-                f"{metric}={best_value:.4f}"
-            )
-            
-            return {
-                'experiment_id': best_exp['id'],
-                'name': best_exp['name'],
-                'probe_type': best_exp['probe_type'],
-                'model_type': best_exp['model_type'],
-                'M': best_exp['M'],
-                'K': best_exp['K'],
-                'metric_name': metric,
-                'metric_value': best_value,
-                'full_metrics': best_exp['metrics'],
-                'config': best_exp['full_config']
-            }
+        # Sort descending by metric value
+        experiments_with_metric.sort(key=lambda x: x[0], reverse=True)
         
-        return None
+        # Get top N
+        top_experiments = experiments_with_metric[:top_n]
+        
+        # Convert to ExperimentResult objects
+        results = []
+        for value, exp in top_experiments:
+            result = self.tracker.get_result(exp['id'])
+            if result:
+                results.append(result)
+                logger.info(
+                    f"Rank {len(results)}: experiment_id={exp['id']}, "
+                    f"{metric}={value:.4f}"
+                )
+        
+        return results
     
-    def statistical_summary(self, experiment_ids: List[int]) -> Dict[str, Dict[str, float]]:
-        """
-        Compute statistical summary (mean, std, min, max) for metrics.
-        
-        Args:
-            experiment_ids: List of experiment IDs to analyze
-            
-        Returns:
-            Dictionary mapping metric names to statistics
-        """
-        logger.info(f"Computing statistical summary for {len(experiment_ids)} experiments")
-        
-        # Collect all metrics
-        all_metrics = {}
-        
-        for exp_id in experiment_ids:
-            exp = self.tracker.get_experiment(exp_id)
-            
-            if exp is None or exp['status'] != 'completed':
-                continue
-            
-            metrics = exp['metrics']
-            
-            for metric_name, value in metrics.items():
-                if metric_name not in all_metrics:
-                    all_metrics[metric_name] = []
-                all_metrics[metric_name].append(value)
-        
-        # Compute statistics
-        summary = {}
-        
-        for metric_name, values in all_metrics.items():
-            if len(values) == 0:
-                continue
-            
-            values_array = np.array(values)
-            
-            summary[metric_name] = {
-                'mean': float(np.mean(values_array)),
-                'std': float(np.std(values_array)),
-                'min': float(np.min(values_array)),
-                'max': float(np.max(values_array)),
-                'median': float(np.median(values_array)),
-                'count': len(values)
-            }
-        
-        return summary
-    
-    def fidelity_gap_analysis(
-        self,
-        probe_type: Optional[str] = None,
-        model_type: Optional[str] = None
-    ) -> pd.DataFrame:
+    def fidelity_gap_analysis(self) -> pd.DataFrame:
         """
         Analyze the fidelity gap between synthetic and Sionna experiments.
         
-        Args:
-            probe_type: Optional filter by probe type
-            model_type: Optional filter by model type
-            
         Returns:
-            DataFrame with fidelity gap analysis
+            DataFrame with fidelity gap comparison (synthetic vs Sionna)
         """
         logger.info("Performing fidelity gap analysis")
         
-        # Get all experiments
+        # Get all completed experiments
         all_experiments = self.tracker.get_all_experiments(status='completed')
+        
+        if not all_experiments:
+            logger.warning("No completed experiments found")
+            return pd.DataFrame()
         
         # Separate by fidelity
         synthetic_exps = []
         sionna_exps = []
         
         for exp in all_experiments:
-            # Apply filters
-            if probe_type and exp['probe_type'] != probe_type:
-                continue
-            if model_type and exp['model_type'] != model_type:
-                continue
-            
             fidelity = exp.get('data_fidelity', 'synthetic')
             
             if fidelity == 'synthetic':
@@ -320,6 +241,10 @@ class ResultAnalyzer:
             f"Found {len(synthetic_exps)} synthetic and "
             f"{len(sionna_exps)} Sionna experiments"
         )
+        
+        if not synthetic_exps or not sionna_exps:
+            logger.warning("Insufficient data for fidelity gap analysis")
+            return pd.DataFrame()
         
         # Match experiments by configuration
         comparison_data = []
@@ -354,29 +279,23 @@ class ResultAnalyzer:
                     'synthetic_top_5': synth_metrics.get('top_5_accuracy', 0.0),
                     'sionna_top_5': sionna_metrics.get('top_5_accuracy', 0.0),
                     'gap_top_5': synth_metrics.get('top_5_accuracy', 0.0) - sionna_metrics.get('top_5_accuracy', 0.0),
-                    'synthetic_top_10': synth_metrics.get('top_10_accuracy', 0.0),
-                    'sionna_top_10': sionna_metrics.get('top_10_accuracy', 0.0),
-                    'gap_top_10': synth_metrics.get('top_10_accuracy', 0.0) - sionna_metrics.get('top_10_accuracy', 0.0),
                 })
         
         df = pd.DataFrame(comparison_data)
         
         if len(df) > 0:
-            # Add relative gap columns (only where synthetic values are significant)
-            df['relative_gap_top_1'] = np.where(
+            # Add relative gap columns (as percentages)
+            df['relative_gap_top_1_pct'] = np.where(
                 df['synthetic_top_1'] > 0.01,
-                df['gap_top_1'] / df['synthetic_top_1'],
+                (df['gap_top_1'] / df['synthetic_top_1']) * 100,
                 np.nan
             )
-            df['relative_gap_top_5'] = np.where(
+            df['relative_gap_top_5_pct'] = np.where(
                 df['synthetic_top_5'] > 0.01,
-                df['gap_top_5'] / df['synthetic_top_5'],
+                (df['gap_top_5'] / df['synthetic_top_5']) * 100,
                 np.nan
             )
-            df['relative_gap_top_10'] = np.where(
-                df['synthetic_top_10'] > 0.01,
-                df['gap_top_10'] / df['synthetic_top_10'],
-                np.nan
-            )
+            
+            logger.info(f"Fidelity gap analysis complete: {len(df)} matched pairs")
         
         return df

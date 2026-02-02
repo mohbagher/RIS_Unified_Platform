@@ -1,21 +1,29 @@
 """Interactive dashboard with ipywidgets for RIS Auto-Research Engine."""
 
-import ipywidgets as widgets
-from IPython.display import display, clear_output
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
 import sqlite3
+import time
+import json
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-import json
-import time
+from IPython.display import display, clear_output
+
+try:
+    import ipywidgets as widgets
+    IPYWIDGETS_AVAILABLE = True
+except ImportError:
+    IPYWIDGETS_AVAILABLE = False
+    widgets = None
 
 from ris_research_engine.foundation import (
     SystemConfig, TrainingConfig, ExperimentConfig, ResultTracker
 )
 from ris_research_engine.foundation.logging_config import get_logger
-from ris_research_engine.engine import ExperimentRunner, SearchController
+from ris_research_engine.engine import (
+    ExperimentRunner, SearchController, ResultAnalyzer
+)
 from ris_research_engine.plugins.probes import list_probes
 from ris_research_engine.plugins.models import list_models
 
@@ -23,43 +31,65 @@ logger = get_logger(__name__)
 
 
 class RISDashboard:
-    """Interactive 5-tab dashboard for RIS experiments."""
+    """Interactive 5-tab ipywidgets dashboard for RIS experiments."""
     
-    def __init__(self, db_path: str = "results.db"):
+    def __init__(self, db_path: str = "outputs/experiments/results.db"):
         """
         Initialize the RIS Dashboard.
         
         Args:
-            db_path: Path to SQLite database
+            db_path: Path to SQLite database for results storage
+            
+        Raises:
+            ImportError: If ipywidgets is not installed
         """
-        self.db_path = db_path
-        self.tracker = ResultTracker(db_path)
-        self.runner = ExperimentRunner()
-        self.controller = SearchController(db_path)
+        if not IPYWIDGETS_AVAILABLE:
+            raise ImportError(
+                "ipywidgets is required for RISDashboard. "
+                "Install with: pip install ipywidgets"
+            )
+        
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        self.tracker = ResultTracker(str(self.db_path))
+        self.runner = ExperimentRunner(str(self.db_path))
+        self.controller = SearchController(str(self.db_path))
+        self.analyzer = ResultAnalyzer(str(self.db_path))
         
         # Experiment queue
         self.queue = []
         
-        # Create widgets
+        # Create all widgets
         self._create_widgets()
         
         logger.info("RISDashboard initialized")
     
     def _create_widgets(self):
-        """Create all widgets for the dashboard."""
+        """Create all dashboard widgets."""
         
         # === Tab 1: Configure ===
         # System parameters
-        self.N_slider = widgets.IntSlider(value=64, min=16, max=256, step=16, 
-                                         description='N (elements):')
-        self.K_slider = widgets.IntSlider(value=64, min=16, max=256, step=16,
-                                         description='K (codebook):')
-        self.M_slider = widgets.IntSlider(value=8, min=2, max=64, step=2,
-                                         description='M (measurements):')
-        self.freq_slider = widgets.FloatSlider(value=28, min=1, max=100, step=1,
-                                              description='Frequency (GHz):')
-        self.snr_slider = widgets.FloatSlider(value=20, min=-10, max=40, step=5,
-                                             description='SNR (dB):')
+        self.N_slider = widgets.IntSlider(
+            value=64, min=16, max=256, step=16,
+            description='N (elements):', style={'description_width': '120px'}
+        )
+        self.K_slider = widgets.IntSlider(
+            value=64, min=16, max=256, step=16,
+            description='K (codebook):', style={'description_width': '120px'}
+        )
+        self.M_slider = widgets.IntSlider(
+            value=8, min=2, max=64, step=2,
+            description='M (measurements):', style={'description_width': '120px'}
+        )
+        self.freq_slider = widgets.FloatSlider(
+            value=28, min=1, max=100, step=1,
+            description='Frequency (GHz):', style={'description_width': '120px'}
+        )
+        self.snr_slider = widgets.FloatSlider(
+            value=20, min=-10, max=40, step=5,
+            description='SNR (dB):', style={'description_width': '120px'}
+        )
         
         # Probe and model selection
         available_probes = list_probes()
@@ -68,134 +98,161 @@ class RISDashboard:
         self.probe_dropdown = widgets.Dropdown(
             options=available_probes,
             value=available_probes[0] if available_probes else None,
-            description='Probe:'
+            description='Probe:', style={'description_width': '120px'}
         )
         
         self.model_dropdown = widgets.Dropdown(
             options=available_models,
             value=available_models[0] if available_models else None,
-            description='Model:'
+            description='Model:', style={'description_width': '120px'}
         )
         
         # Training parameters
-        self.epochs_slider = widgets.IntSlider(value=100, min=10, max=500, step=10,
-                                              description='Epochs:')
+        self.epochs_slider = widgets.IntSlider(
+            value=50, min=10, max=500, step=10,
+            description='Epochs:', style={'description_width': '120px'}
+        )
         self.lr_dropdown = widgets.Dropdown(
             options=[1e-4, 5e-4, 1e-3, 5e-3, 1e-2],
             value=1e-3,
-            description='Learning Rate:'
+            description='Learning Rate:', style={'description_width': '120px'}
         )
-        self.batch_slider = widgets.IntSlider(value=64, min=16, max=256, step=16,
-                                             description='Batch Size:')
+        self.batch_slider = widgets.IntSlider(
+            value=64, min=16, max=256, step=16,
+            description='Batch Size:', style={'description_width': '120px'}
+        )
+        self.n_samples_slider = widgets.IntSlider(
+            value=5000, min=1000, max=20000, step=1000,
+            description='N Samples:', style={'description_width': '120px'}
+        )
         
-        # Queue management
-        self.add_queue_btn = widgets.Button(description='Add to Queue', 
-                                           button_style='success')
+        # Queue buttons
+        self.add_queue_btn = widgets.Button(
+            description='Add to Queue', button_style='success',
+            icon='plus', layout=widgets.Layout(width='150px')
+        )
         self.add_queue_btn.on_click(self._add_to_queue)
         
-        self.view_queue_btn = widgets.Button(description='View Queue',
-                                            button_style='info')
+        self.view_queue_btn = widgets.Button(
+            description='View Queue', button_style='info',
+            icon='list', layout=widgets.Layout(width='150px')
+        )
         self.view_queue_btn.on_click(self._view_queue)
         
-        self.clear_queue_btn = widgets.Button(description='Clear Queue',
-                                             button_style='warning')
+        self.clear_queue_btn = widgets.Button(
+            description='Clear Queue', button_style='warning',
+            icon='trash', layout=widgets.Layout(width='150px')
+        )
         self.clear_queue_btn.on_click(self._clear_queue)
         
         self.queue_output = widgets.Output()
         
         # === Tab 2: Run ===
-        self.run_single_btn = widgets.Button(description='Run Single Experiment',
-                                            button_style='primary',
-                                            layout=widgets.Layout(width='200px'))
+        self.run_single_btn = widgets.Button(
+            description='Run Single Experiment', button_style='primary',
+            icon='play', layout=widgets.Layout(width='200px')
+        )
         self.run_single_btn.on_click(self._run_single)
         
-        self.run_queue_btn = widgets.Button(description='Run Queue',
-                                           button_style='success',
-                                           layout=widgets.Layout(width='200px'))
+        self.run_queue_btn = widgets.Button(
+            description='Run Queue', button_style='success',
+            icon='list', layout=widgets.Layout(width='200px')
+        )
         self.run_queue_btn.on_click(self._run_queue)
         
-        self.run_search_btn = widgets.Button(description='Run Search',
-                                            button_style='info',
-                                            layout=widgets.Layout(width='200px'))
+        self.run_search_btn = widgets.Button(
+            description='Run Search Campaign', button_style='info',
+            icon='search', layout=widgets.Layout(width='200px'), disabled=True
+        )
         self.run_search_btn.on_click(self._run_search)
         
-        self.stop_btn = widgets.Button(description='Stop',
-                                      button_style='danger',
-                                      layout=widgets.Layout(width='200px'),
-                                      disabled=True)
+        self.stop_btn = widgets.Button(
+            description='Stop', button_style='danger',
+            icon='stop', layout=widgets.Layout(width='200px'), disabled=True
+        )
         
-        self.progress_bar = widgets.FloatProgress(value=0, min=0, max=1,
-                                                 description='Progress:',
-                                                 layout=widgets.Layout(width='100%'))
+        self.progress_bar = widgets.FloatProgress(
+            value=0, min=0, max=1, description='Progress:',
+            bar_style='info', layout=widgets.Layout(width='100%')
+        )
         
-        self.status_text = widgets.HTML(value='<b>Ready</b>')
+        self.status_text = widgets.HTML(value='<b style="color: green;">Ready</b>')
         
         self.run_output = widgets.Output()
         
         # === Tab 3: Results ===
         self.exp_selector = widgets.Dropdown(
-            options=[],
-            description='Experiment:',
+            options=[], description='Experiment:',
             layout=widgets.Layout(width='100%')
         )
         self.exp_selector.observe(self._on_experiment_selected, names='value')
         
-        self.refresh_exp_btn = widgets.Button(description='Refresh',
-                                             button_style='info')
+        self.refresh_exp_btn = widgets.Button(
+            description='Refresh', button_style='info', icon='refresh'
+        )
         self.refresh_exp_btn.on_click(self._refresh_experiments)
         
         self.results_output = widgets.Output()
         
         # === Tab 4: Analysis ===
         self.campaign_selector = widgets.Dropdown(
-            options=[],
-            description='Campaign:',
+            options=[], description='Campaign:',
             layout=widgets.Layout(width='100%')
         )
         self.campaign_selector.observe(self._on_campaign_selected, names='value')
         
-        self.refresh_camp_btn = widgets.Button(description='Refresh',
-                                              button_style='info')
+        self.refresh_camp_btn = widgets.Button(
+            description='Refresh', button_style='info', icon='refresh'
+        )
         self.refresh_camp_btn.on_click(self._refresh_campaigns)
         
         self.metric_dropdown = widgets.Dropdown(
             options=['top_1_accuracy', 'top_5_accuracy', 'top_10_accuracy',
-                    'mean_reciprocal_rank', 'inference_time'],
+                    'mean_reciprocal_rank', 'inference_time_ms'],
             value='top_1_accuracy',
-            description='Metric:'
+            description='Metric:', style={'description_width': '120px'}
         )
         
-        self.plot_comparison_btn = widgets.Button(description='Plot Comparison',
-                                                 button_style='primary')
+        self.plot_comparison_btn = widgets.Button(
+            description='Plot Comparison', button_style='primary', icon='bar-chart'
+        )
         self.plot_comparison_btn.on_click(self._plot_comparison)
         
-        self.export_btn = widgets.Button(description='Export Results',
-                                        button_style='success')
-        self.export_btn.on_click(self._export_results)
+        self.export_results_btn = widgets.Button(
+            description='Export Results', button_style='success', icon='download'
+        )
+        self.export_results_btn.on_click(self._export_results)
         
         self.analysis_output = widgets.Output()
         
         # === Tab 5: Database ===
-        self.filter_campaign = widgets.Text(description='Campaign:',
-                                           placeholder='Filter by campaign')
+        self.filter_campaign = widgets.Text(
+            description='Campaign:', placeholder='Filter by campaign name',
+            style={'description_width': '120px'}
+        )
         self.filter_status = widgets.Dropdown(
             options=['all', 'completed', 'failed', 'pruned'],
-            value='all',
-            description='Status:'
+            value='all', description='Status:',
+            style={'description_width': '120px'}
         )
-        self.filter_limit = widgets.IntSlider(value=20, min=5, max=100, step=5,
-                                             description='Limit:')
+        self.filter_limit = widgets.IntSlider(
+            value=20, min=5, max=100, step=5,
+            description='Limit:', style={'description_width': '120px'}
+        )
         
-        self.apply_filter_btn = widgets.Button(description='Apply Filter',
-                                              button_style='primary')
+        self.apply_filter_btn = widgets.Button(
+            description='Apply Filter', button_style='primary', icon='filter'
+        )
         self.apply_filter_btn.on_click(self._apply_filter)
         
-        self.export_csv_btn = widgets.Button(description='Export CSV',
-                                            button_style='success')
+        self.export_csv_btn = widgets.Button(
+            description='Export CSV', button_style='success', icon='file'
+        )
         self.export_csv_btn.on_click(lambda x: self._export_database('csv'))
         
-        self.export_json_btn = widgets.Button(description='Export JSON',
-                                             button_style='info')
+        self.export_json_btn = widgets.Button(
+            description='Export JSON', button_style='info', icon='file-code'
+        )
         self.export_json_btn.on_click(lambda x: self._export_database('json'))
         
         self.db_output = widgets.Output()
@@ -205,33 +262,35 @@ class RISDashboard:
         self._refresh_campaigns(None)
     
     def _add_to_queue(self, btn):
-        """Add current configuration to queue."""
+        """Add current configuration to experiment queue."""
         config = self._get_current_config()
         self.queue.append(config)
         
         with self.queue_output:
             clear_output(wait=True)
-            print(f"✓ Added to queue (total: {len(self.queue)})")
-            print(f"Config: {config['name']}")
+            print(f"✓ Added to queue (total: {len(self.queue)} experiments)")
+            print(f"Config: {config.name}")
     
     def _view_queue(self, btn):
-        """Display current queue."""
+        """Display current experiment queue."""
         with self.queue_output:
             clear_output(wait=True)
             if not self.queue:
                 print("Queue is empty")
             else:
-                print(f"Queue ({len(self.queue)} experiments):")
-                print("=" * 60)
+                print(f"Experiment Queue ({len(self.queue)} experiments):")
+                print("=" * 70)
                 for i, cfg in enumerate(self.queue, 1):
-                    print(f"{i}. {cfg['name']}")
+                    print(f"{i}. {cfg.name}")
+                    print(f"   Probe: {cfg.probe_type}, Model: {cfg.model_type}")
+                    print(f"   M={cfg.system.M}, K={cfg.system.K}, N={cfg.system.N}")
     
     def _clear_queue(self, btn):
         """Clear the experiment queue."""
         self.queue.clear()
         with self.queue_output:
             clear_output(wait=True)
-            print("Queue cleared")
+            print("✓ Queue cleared")
     
     def _get_current_config(self) -> ExperimentConfig:
         """Build ExperimentConfig from current widget values."""
@@ -265,7 +324,7 @@ class RISDashboard:
             model_type=model,
             model_params={},
             data_source='synthetic_rayleigh',
-            data_params={'n_samples': 1000},
+            data_params={'n_samples': self.n_samples_slider.value},
             metrics=['top_k_accuracy', 'mean_reciprocal_rank'],
             tags=['dashboard']
         )
@@ -273,9 +332,10 @@ class RISDashboard:
         return config
     
     def _run_single(self, btn):
-        """Run a single experiment."""
+        """Run a single experiment with current configuration."""
         config = self._get_current_config()
         
+        # Disable buttons
         self.run_single_btn.disabled = True
         self.run_queue_btn.disabled = True
         self.run_search_btn.disabled = True
@@ -283,31 +343,33 @@ class RISDashboard:
         
         with self.run_output:
             clear_output(wait=True)
-            print(f"Running: {config.name}")
-            print("=" * 60)
+            print(f"🚀 Running: {config.name}")
+            print("=" * 70)
             
             try:
-                self.status_text.value = '<b>Running...</b>'
+                self.status_text.value = '<b style="color: orange;">Running...</b>'
                 self.progress_bar.value = 0.5
                 
                 result = self.runner.run(config)
                 exp_id = self.tracker.save_experiment(result)
                 
                 self.progress_bar.value = 1.0
-                self.status_text.value = f'<b>Completed - ID: {exp_id}</b>'
+                self.status_text.value = f'<b style="color: green;">Completed - ID: {exp_id}</b>'
                 
-                print(f"✓ Experiment completed - ID: {exp_id}")
+                print(f"\n✓ Experiment completed - ID: {exp_id}")
                 print(f"Status: {result.status}")
                 print(f"Top-1 Accuracy: {result.metrics.get('top_1_accuracy', 0):.4f}")
+                print(f"Training Time: {result.training_time_seconds:.2f}s")
                 
                 self._refresh_experiments(None)
                 
             except Exception as e:
-                self.status_text.value = '<b>Failed</b>'
-                print(f"✗ Error: {str(e)}")
+                self.status_text.value = '<b style="color: red;">Failed</b>'
+                print(f"\n✗ Error: {str(e)}")
                 logger.error(f"Experiment failed: {e}", exc_info=True)
             
             finally:
+                # Re-enable buttons
                 self.run_single_btn.disabled = False
                 self.run_queue_btn.disabled = False
                 self.run_search_btn.disabled = False
@@ -315,13 +377,14 @@ class RISDashboard:
                 self.progress_bar.value = 0
     
     def _run_queue(self, btn):
-        """Run all experiments in queue."""
+        """Run all experiments in the queue."""
         if not self.queue:
             with self.run_output:
                 clear_output(wait=True)
-                print("Queue is empty")
+                print("⚠ Queue is empty")
             return
         
+        # Disable buttons
         self.run_single_btn.disabled = True
         self.run_queue_btn.disabled = True
         self.run_search_btn.disabled = True
@@ -329,49 +392,55 @@ class RISDashboard:
         
         with self.run_output:
             clear_output(wait=True)
-            print(f"Running queue ({len(self.queue)} experiments)...")
-            print("=" * 60)
+            print(f"🚀 Running queue ({len(self.queue)} experiments)...")
+            print("=" * 70)
             
             total = len(self.queue)
+            completed_count = 0
             
             for i, config in enumerate(self.queue, 1):
                 print(f"\n[{i}/{total}] {config.name}")
                 
                 try:
-                    self.status_text.value = f'<b>Running {i}/{total}</b>'
-                    self.progress_bar.value = i / total
+                    self.status_text.value = f'<b style="color: orange;">Running {i}/{total}</b>'
+                    self.progress_bar.value = (i - 0.5) / total
                     
                     result = self.runner.run(config)
                     exp_id = self.tracker.save_experiment(result)
                     
                     print(f"  ✓ Completed - ID: {exp_id}")
+                    print(f"    Top-1: {result.metrics.get('top_1_accuracy', 0):.4f}")
+                    completed_count += 1
                     
                 except Exception as e:
                     print(f"  ✗ Failed: {str(e)}")
                     logger.error(f"Queue experiment failed: {e}")
+                
+                self.progress_bar.value = i / total
             
-            print("\n" + "=" * 60)
-            print("Queue completed")
+            print("\n" + "=" * 70)
+            print(f"✓ Queue completed: {completed_count}/{total} experiments successful")
             
             self.queue.clear()
             self._refresh_experiments(None)
         
+        # Re-enable buttons
         self.run_single_btn.disabled = False
         self.run_queue_btn.disabled = False
         self.run_search_btn.disabled = False
         self.stop_btn.disabled = True
         self.progress_bar.value = 0
-        self.status_text.value = '<b>Ready</b>'
+        self.status_text.value = '<b style="color: green;">Ready</b>'
     
     def _run_search(self, btn):
-        """Run a search campaign."""
+        """Run a search campaign (placeholder)."""
         with self.run_output:
             clear_output(wait=True)
-            print("Search feature coming soon...")
-            print("Use RISEngine.search() for now")
+            print("⚠ Search campaign feature coming soon...")
+            print("Use RISEngine.search() method for now")
     
     def _on_experiment_selected(self, change):
-        """Handle experiment selection."""
+        """Handle experiment selection in Results tab."""
         exp_id = change['new']
         if exp_id is None:
             return
@@ -381,18 +450,20 @@ class RISDashboard:
             
             exp = self.tracker.get_experiment(exp_id)
             if not exp:
-                print("Experiment not found")
+                print("⚠ Experiment not found")
                 return
             
             # Display metrics
             print(f"Experiment ID: {exp['id']}")
             print(f"Name: {exp['name']}")
+            print(f"Probe: {exp['probe_type']}, Model: {exp['model_type']}")
+            print(f"M={exp['M']}, K={exp['K']}, N={exp['N']}")
             print(f"Status: {exp['status']}")
             print("=" * 70)
             
             print("\nMetrics:")
             metrics_data = []
-            for key, val in exp['metrics'].items():
+            for key, val in sorted(exp['metrics'].items()):
                 if isinstance(val, float):
                     metrics_data.append({'Metric': key, 'Value': f"{val:.4f}"})
                 else:
@@ -410,11 +481,11 @@ class RISDashboard:
                 
                 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
                 
-                # Loss
-                if 'train_loss' in history:
+                # Loss plot
+                if 'train_loss' in history and len(history['train_loss']) > 0:
                     epochs = range(1, len(history['train_loss']) + 1)
                     axes[0].plot(epochs, history['train_loss'], label='Train', linewidth=2)
-                    if 'val_loss' in history:
+                    if 'val_loss' in history and len(history['val_loss']) > 0:
                         axes[0].plot(epochs, history['val_loss'], label='Val', linewidth=2)
                     axes[0].set_xlabel('Epoch')
                     axes[0].set_ylabel('Loss')
@@ -422,12 +493,12 @@ class RISDashboard:
                     axes[0].legend()
                     axes[0].grid(True, alpha=0.3)
                 
-                # Accuracy
-                if 'val_top_1_accuracy' in history:
+                # Accuracy plot
+                if 'val_top_1_accuracy' in history and len(history['val_top_1_accuracy']) > 0:
                     epochs = range(1, len(history['val_top_1_accuracy']) + 1)
                     axes[1].plot(epochs, history['val_top_1_accuracy'], 
                                label='Top-1', linewidth=2)
-                    if 'val_top_5_accuracy' in history:
+                    if 'val_top_5_accuracy' in history and len(history['val_top_5_accuracy']) > 0:
                         axes[1].plot(epochs, history['val_top_5_accuracy'], 
                                    label='Top-5', linewidth=2)
                     axes[1].set_xlabel('Epoch')
@@ -440,21 +511,21 @@ class RISDashboard:
                 plt.show()
     
     def _refresh_experiments(self, btn):
-        """Refresh experiment list."""
+        """Refresh experiment list dropdown."""
         experiments = self.tracker.get_all_experiments(limit=50)
         
-        options = [(f"ID {e['id']}: {e['name'][:40]}", e['id']) 
+        options = [(f"ID {e['id']}: {e['name'][:40]} ({e['status']})", e['id']) 
                   for e in experiments]
         
-        self.exp_selector.options = options
+        self.exp_selector.options = options if options else [('No experiments', None)]
         
         if btn is not None:
             with self.results_output:
                 clear_output(wait=True)
-                print(f"Refreshed - {len(experiments)} experiments found")
+                print(f"✓ Refreshed - {len(experiments)} experiments found")
     
     def _on_campaign_selected(self, change):
-        """Handle campaign selection."""
+        """Handle campaign selection in Analysis tab."""
         campaign_id = change['new']
         if campaign_id is None:
             return
@@ -462,16 +533,29 @@ class RISDashboard:
         with self.analysis_output:
             clear_output(wait=True)
             
-            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            # Get campaign from database
+            try:
+                conn = sqlite3.connect(str(self.db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+                row = cursor.fetchone()
+                campaign = dict(row) if row else None
+                conn.close()
+            except sqlite3.Error as e:
+                campaign = None
+                print(f"⚠ Database error: {e}")
+                return
+            
             if not campaign:
-                print("Campaign not found")
+                print("⚠ Campaign not found")
                 return
             
             print(f"Campaign: {campaign['name']}")
-            print(f"Strategy: {campaign['search_strategy']}")
+            print(f"Strategy: {campaign.get('search_strategy', 'N/A')}")
             print("=" * 70)
-            print(f"Total Experiments: {campaign['total_experiments']}")
-            print(f"Completed: {campaign['completed']}")
+            print(f"Total Experiments: {campaign.get('total_experiments', 0)}")
+            print(f"Completed: {campaign.get('completed_experiments', 0)}")
             
             # Get campaign experiments
             experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
@@ -487,10 +571,9 @@ class RISDashboard:
                     print(f"  Top-1 Accuracy: {best['metrics'].get('top_1_accuracy', 0):.4f}")
     
     def _refresh_campaigns(self, btn):
-        """Refresh campaign list."""
-        # Get all campaigns by querying database directly
+        """Refresh campaign list dropdown."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(str(self.db_path))
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT id, name FROM campaigns ORDER BY timestamp DESC LIMIT 50")
@@ -503,19 +586,19 @@ class RISDashboard:
         options = [(f"ID {c['id']}: {c['name'][:40]}", c['id']) 
                   for c in campaigns]
         
-        self.campaign_selector.options = options
+        self.campaign_selector.options = options if options else [('No campaigns', None)]
         
         if btn is not None:
             with self.analysis_output:
                 clear_output(wait=True)
-                print(f"Refreshed - {len(campaigns)} campaigns found")
+                print(f"✓ Refreshed - {len(campaigns)} campaigns found")
     
     def _plot_comparison(self, btn):
         """Plot comparison for selected campaign."""
         campaign_id = self.campaign_selector.value
         if campaign_id is None:
             with self.analysis_output:
-                print("No campaign selected")
+                print("⚠ No campaign selected")
             return
         
         metric = self.metric_dropdown.value
@@ -523,18 +606,37 @@ class RISDashboard:
         with self.analysis_output:
             clear_output(wait=True)
             
-            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            # Get campaign
+            try:
+                conn = sqlite3.connect(str(self.db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+                row = cursor.fetchone()
+                campaign = dict(row) if row else None
+                conn.close()
+            except sqlite3.Error:
+                campaign = None
+            
+            if not campaign:
+                print("⚠ Campaign not found")
+                return
+            
             experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
             completed = [e for e in experiments if e['status'] == 'completed']
             
             if not completed:
-                print("No completed experiments in campaign")
+                print("⚠ No completed experiments in campaign")
                 return
             
-            # Bar chart
+            # Create bar chart
             data = [(e['name'][:20], e['metrics'].get(metric, 0)) 
                    for e in completed]
-            names, values = zip(*data)
+            names, values = zip(*data) if data else ([], [])
+            
+            if not names:
+                print("⚠ No data to plot")
+                return
             
             fig, ax = plt.subplots(figsize=(12, 6))
             
@@ -550,19 +652,40 @@ class RISDashboard:
             for bar, color in zip(bars, colors):
                 bar.set_color(color)
             
+            # Add value labels
+            for bar, value in zip(bars, values):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+            
             plt.tight_layout()
             plt.show()
     
     def _export_results(self, btn):
-        """Export analysis results."""
+        """Export analysis results for selected campaign."""
         campaign_id = self.campaign_selector.value
         if campaign_id is None:
             with self.analysis_output:
-                print("No campaign selected")
+                print("⚠ No campaign selected")
             return
         
         with self.analysis_output:
-            campaign = self.tracker.get_campaign(campaign_id=campaign_id)
+            # Get campaign
+            try:
+                conn = sqlite3.connect(str(self.db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+                row = cursor.fetchone()
+                campaign = dict(row) if row else None
+                conn.close()
+            except sqlite3.Error:
+                campaign = None
+            
+            if not campaign:
+                print("⚠ Campaign not found")
+                return
+            
             experiments = self.tracker.get_all_experiments(campaign_name=campaign['name'])
             
             # Create DataFrame
@@ -582,13 +705,13 @@ class RISDashboard:
             
             df = pd.DataFrame(data)
             
-            filename = f"{campaign['name']}_results.csv"
+            filename = f"{campaign['name']}_results_{time.strftime('%Y%m%d_%H%M%S')}.csv"
             df.to_csv(filename, index=False)
             
-            print(f"✓ Exported to {filename}")
+            print(f"✓ Exported {len(df)} experiments to {filename}")
     
     def _apply_filter(self, btn):
-        """Apply database filters."""
+        """Apply database filters and display results."""
         with self.db_output:
             clear_output(wait=True)
             
@@ -604,7 +727,7 @@ class RISDashboard:
             
             # Display as table
             if not experiments:
-                print("No experiments found")
+                print("⚠ No experiments found")
                 return
             
             data = []
@@ -621,13 +744,19 @@ class RISDashboard:
                 })
             
             df = pd.DataFrame(data)
+            print("=" * 100)
             print(df.to_string(index=False))
-            print(f"\nShowing {len(df)} of {len(experiments)} experiments")
+            print("=" * 100)
+            print(f"Showing {len(df)} experiments")
     
     def _export_database(self, format: str):
-        """Export database to CSV or JSON."""
+        """Export entire database to CSV or JSON."""
         with self.db_output:
             experiments = self.tracker.get_all_experiments(limit=1000)
+            
+            if not experiments:
+                print("⚠ No experiments to export")
+                return
             
             if format == 'csv':
                 data = []
@@ -657,7 +786,7 @@ class RISDashboard:
                 print(f"✓ Exported {len(experiments)} experiments to {filename}")
     
     def display(self):
-        """Display the dashboard interface."""
+        """Display the dashboard interface with 5 tabs."""
         # Tab 1: Configure
         tab1 = widgets.VBox([
             widgets.HTML('<h3>System Parameters</h3>'),
@@ -673,7 +802,8 @@ class RISDashboard:
             self.epochs_slider,
             self.lr_dropdown,
             self.batch_slider,
-            widgets.HTML('<h3>Queue Management</h3>'),
+            self.n_samples_slider,
+            widgets.HTML('<h3>Experiment Queue</h3>'),
             widgets.HBox([self.add_queue_btn, self.view_queue_btn, self.clear_queue_btn]),
             self.queue_output
         ])
@@ -681,8 +811,12 @@ class RISDashboard:
         # Tab 2: Run
         tab2 = widgets.VBox([
             widgets.HTML('<h3>Run Experiments</h3>'),
-            widgets.HBox([self.run_single_btn, self.run_queue_btn, 
-                         self.run_search_btn, self.stop_btn]),
+            widgets.HBox([
+                self.run_single_btn,
+                self.run_queue_btn,
+                self.run_search_btn,
+                self.stop_btn
+            ]),
             self.progress_bar,
             self.status_text,
             widgets.HTML('<hr>'),
@@ -702,7 +836,7 @@ class RISDashboard:
             widgets.HTML('<h3>Campaign Analysis</h3>'),
             widgets.HBox([self.campaign_selector, self.refresh_camp_btn]),
             self.metric_dropdown,
-            widgets.HBox([self.plot_comparison_btn, self.export_btn]),
+            widgets.HBox([self.plot_comparison_btn, self.export_results_btn]),
             widgets.HTML('<hr>'),
             self.analysis_output
         ])
@@ -719,11 +853,11 @@ class RISDashboard:
         
         # Create tabs
         tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4, tab5])
-        tabs.set_title(0, 'Configure')
-        tabs.set_title(1, 'Run')
-        tabs.set_title(2, 'Results')
-        tabs.set_title(3, 'Analysis')
-        tabs.set_title(4, 'Database')
+        tabs.set_title(0, '⚙️ Configure')
+        tabs.set_title(1, '▶️ Run')
+        tabs.set_title(2, '📊 Results')
+        tabs.set_title(3, '📈 Analysis')
+        tabs.set_title(4, '🗄️ Database')
         
         # Display
         display(widgets.VBox([
