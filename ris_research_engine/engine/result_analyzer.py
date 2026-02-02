@@ -284,15 +284,15 @@ class ResultAnalyzer:
         df = pd.DataFrame(comparison_data)
         
         if len(df) > 0:
-            # Add relative gap columns
-            df['relative_gap_top_1'] = np.where(
+            # Add relative gap columns (as percentages)
+            df['relative_gap_top_1_pct'] = np.where(
                 df['synthetic_top_1'] > 0.01,
-                (df['gap_top_1'] / df['synthetic_top_1']) * 100,  # As percentage
+                (df['gap_top_1'] / df['synthetic_top_1']) * 100,
                 np.nan
             )
-            df['relative_gap_top_5'] = np.where(
+            df['relative_gap_top_5_pct'] = np.where(
                 df['synthetic_top_5'] > 0.01,
-                (df['gap_top_5'] / df['synthetic_top_5']) * 100,  # As percentage
+                (df['gap_top_5'] / df['synthetic_top_5']) * 100,
                 np.nan
             )
             

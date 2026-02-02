@@ -370,7 +370,7 @@ class ReportGenerator:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
         
         # Create configuration labels
-        df['config'] = df['probe_type'] + '\n' + df['model_type'] + f'\nM={df["M"]}'
+        df['config'] = df['probe_type'] + '\n' + df['model_type'] + '\nM=' + df['M'].astype(str)
         
         # Plot 1: Side-by-side comparison
         x = np.arange(len(df))
@@ -455,13 +455,70 @@ class ReportGenerator:
             plt.tight_layout()
             self._save_figure(fig, save_path)
     
-    def generate_summary_report(self, campaign_results: List[ExperimentResult], save_path: str):
+    def _create_summary_plots(self, campaign_results: List[ExperimentResult]) -> plt.Figure:
+        """
+        Create summary statistics plots.
+        
+        Args:
+            campaign_results: List of ExperimentResult objects
+            
+        Returns:
+            Figure with 2x2 grid of summary plots
+        """
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Campaign Summary Report', fontsize=16, fontweight='bold')
+        
+        # Extract metrics
+        top_1_accs = [r.metrics.get('top_1_accuracy', 0.0) for r in campaign_results]
+        top_5_accs = [r.metrics.get('top_5_accuracy', 0.0) for r in campaign_results]
+        probe_types = [r.config.probe_type for r in campaign_results]
+        model_types = [r.config.model_type for r in campaign_results]
+        
+        # Plot 1: Top-1 accuracy distribution
+        axes[0, 0].hist(top_1_accs, bins=20, alpha=0.7, edgecolor='black')
+        axes[0, 0].set_xlabel('Top-1 Accuracy')
+        axes[0, 0].set_ylabel('Count')
+        axes[0, 0].set_title('Top-1 Accuracy Distribution')
+        axes[0, 0].grid(alpha=0.3)
+        
+        # Plot 2: Top-5 accuracy distribution
+        axes[0, 1].hist(top_5_accs, bins=20, alpha=0.7, edgecolor='black', color='orange')
+        axes[0, 1].set_xlabel('Top-5 Accuracy')
+        axes[0, 1].set_ylabel('Count')
+        axes[0, 1].set_title('Top-5 Accuracy Distribution')
+        axes[0, 1].grid(alpha=0.3)
+        
+        # Plot 3: Probe type distribution
+        probe_counts = pd.Series(probe_types).value_counts()
+        axes[1, 0].bar(range(len(probe_counts)), probe_counts.values, alpha=0.7)
+        axes[1, 0].set_xticks(range(len(probe_counts)))
+        axes[1, 0].set_xticklabels(probe_counts.index, rotation=45, ha='right')
+        axes[1, 0].set_xlabel('Probe Type')
+        axes[1, 0].set_ylabel('Count')
+        axes[1, 0].set_title('Probe Type Distribution')
+        axes[1, 0].grid(axis='y', alpha=0.3)
+        
+        # Plot 4: Model type distribution
+        model_counts = pd.Series(model_types).value_counts()
+        axes[1, 1].bar(range(len(model_counts)), model_counts.values, alpha=0.7, color='green')
+        axes[1, 1].set_xticks(range(len(model_counts)))
+        axes[1, 1].set_xticklabels(model_counts.index, rotation=45, ha='right')
+        axes[1, 1].set_xlabel('Model Type')
+        axes[1, 1].set_ylabel('Count')
+        axes[1, 1].set_title('Model Type Distribution')
+        axes[1, 1].grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+    
+    def generate_summary_report(self, campaign_results: List[ExperimentResult], save_path: str, max_top_experiments: int = 20):
         """
         Generate a multi-page summary report with multiple plots.
         
         Args:
             campaign_results: List of ExperimentResult objects from a campaign
             save_path: Path to save the report PDF
+            max_top_experiments: Maximum number of top experiments to display in comparison (default: 20)
         """
         logger.info(f"Generating summary report for {len(campaign_results)} experiments")
         
@@ -478,60 +535,21 @@ class ReportGenerator:
         
         with PdfPages(pdf_path) as pdf:
             # Page 1: Summary statistics
-            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-            fig.suptitle('Campaign Summary Report', fontsize=16, fontweight='bold')
-            
-            # Extract metrics
-            top_1_accs = [r.metrics.get('top_1_accuracy', 0.0) for r in campaign_results]
-            top_5_accs = [r.metrics.get('top_5_accuracy', 0.0) for r in campaign_results]
-            probe_types = [r.config.probe_type for r in campaign_results]
-            model_types = [r.config.model_type for r in campaign_results]
-            
-            # Plot 1: Top-1 accuracy distribution
-            axes[0, 0].hist(top_1_accs, bins=20, alpha=0.7, edgecolor='black')
-            axes[0, 0].set_xlabel('Top-1 Accuracy')
-            axes[0, 0].set_ylabel('Count')
-            axes[0, 0].set_title('Top-1 Accuracy Distribution')
-            axes[0, 0].grid(alpha=0.3)
-            
-            # Plot 2: Top-5 accuracy distribution
-            axes[0, 1].hist(top_5_accs, bins=20, alpha=0.7, edgecolor='black', color='orange')
-            axes[0, 1].set_xlabel('Top-5 Accuracy')
-            axes[0, 1].set_ylabel('Count')
-            axes[0, 1].set_title('Top-5 Accuracy Distribution')
-            axes[0, 1].grid(alpha=0.3)
-            
-            # Plot 3: Probe type distribution
-            probe_counts = pd.Series(probe_types).value_counts()
-            axes[1, 0].bar(range(len(probe_counts)), probe_counts.values, alpha=0.7)
-            axes[1, 0].set_xticks(range(len(probe_counts)))
-            axes[1, 0].set_xticklabels(probe_counts.index, rotation=45, ha='right')
-            axes[1, 0].set_xlabel('Probe Type')
-            axes[1, 0].set_ylabel('Count')
-            axes[1, 0].set_title('Probe Type Distribution')
-            axes[1, 0].grid(axis='y', alpha=0.3)
-            
-            # Plot 4: Model type distribution
-            model_counts = pd.Series(model_types).value_counts()
-            axes[1, 1].bar(range(len(model_counts)), model_counts.values, alpha=0.7, color='green')
-            axes[1, 1].set_xticks(range(len(model_counts)))
-            axes[1, 1].set_xticklabels(model_counts.index, rotation=45, ha='right')
-            axes[1, 1].set_xlabel('Model Type')
-            axes[1, 1].set_ylabel('Count')
-            axes[1, 1].set_title('Model Type Distribution')
-            axes[1, 1].grid(axis='y', alpha=0.3)
-            
-            plt.tight_layout()
+            fig = self._create_summary_plots(campaign_results)
             pdf.savefig(fig, dpi=300)
             plt.close(fig)
             
             # Page 2: Performance comparison
             fig, ax = plt.subplots(figsize=(14, 8))
             
-            # Create comparison data
-            labels = [f"{r.config.probe_type[:8]}\n{r.config.model_type[:8]}" for r in campaign_results[:20]]  # Limit to 20
-            top_1 = [r.metrics.get('top_1_accuracy', 0.0) for r in campaign_results[:20]]
-            top_5 = [r.metrics.get('top_5_accuracy', 0.0) for r in campaign_results[:20]]
+            # Limit to max_top_experiments for readability
+            top_results = campaign_results[:max_top_experiments]
+            
+            # Create comparison data with truncation for long names
+            max_label_len = 8
+            labels = [f"{r.config.probe_type[:max_label_len]}\n{r.config.model_type[:max_label_len]}" for r in top_results]
+            top_1 = [r.metrics.get('top_1_accuracy', 0.0) for r in top_results]
+            top_5 = [r.metrics.get('top_5_accuracy', 0.0) for r in top_results]
             
             x = np.arange(len(labels))
             width = 0.35
@@ -541,7 +559,7 @@ class ReportGenerator:
             
             ax.set_xlabel('Configuration')
             ax.set_ylabel('Accuracy')
-            ax.set_title('Top Experiments Performance')
+            ax.set_title(f'Top {len(top_results)} Experiments Performance')
             ax.set_xticks(x)
             ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
             ax.legend()
@@ -560,49 +578,9 @@ class ReportGenerator:
         
         logger.info(f"Summary report saved: {pdf_path}")
         
-        # Also save as PNG for the first page
+        # Also save first page as PNG
         png_path = save_path.with_suffix('.png')
-        
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle('Campaign Summary Report', fontsize=16, fontweight='bold')
-        
-        # Recreate first page plots
-        top_1_accs = [r.metrics.get('top_1_accuracy', 0.0) for r in campaign_results]
-        top_5_accs = [r.metrics.get('top_5_accuracy', 0.0) for r in campaign_results]
-        probe_types = [r.config.probe_type for r in campaign_results]
-        model_types = [r.config.model_type for r in campaign_results]
-        
-        axes[0, 0].hist(top_1_accs, bins=20, alpha=0.7, edgecolor='black')
-        axes[0, 0].set_xlabel('Top-1 Accuracy')
-        axes[0, 0].set_ylabel('Count')
-        axes[0, 0].set_title('Top-1 Accuracy Distribution')
-        axes[0, 0].grid(alpha=0.3)
-        
-        axes[0, 1].hist(top_5_accs, bins=20, alpha=0.7, edgecolor='black', color='orange')
-        axes[0, 1].set_xlabel('Top-5 Accuracy')
-        axes[0, 1].set_ylabel('Count')
-        axes[0, 1].set_title('Top-5 Accuracy Distribution')
-        axes[0, 1].grid(alpha=0.3)
-        
-        probe_counts = pd.Series(probe_types).value_counts()
-        axes[1, 0].bar(range(len(probe_counts)), probe_counts.values, alpha=0.7)
-        axes[1, 0].set_xticks(range(len(probe_counts)))
-        axes[1, 0].set_xticklabels(probe_counts.index, rotation=45, ha='right')
-        axes[1, 0].set_xlabel('Probe Type')
-        axes[1, 0].set_ylabel('Count')
-        axes[1, 0].set_title('Probe Type Distribution')
-        axes[1, 0].grid(axis='y', alpha=0.3)
-        
-        model_counts = pd.Series(model_types).value_counts()
-        axes[1, 1].bar(range(len(model_counts)), model_counts.values, alpha=0.7, color='green')
-        axes[1, 1].set_xticks(range(len(model_counts)))
-        axes[1, 1].set_xticklabels(model_counts.index, rotation=45, ha='right')
-        axes[1, 1].set_xlabel('Model Type')
-        axes[1, 1].set_ylabel('Count')
-        axes[1, 1].set_title('Model Type Distribution')
-        axes[1, 1].grid(axis='y', alpha=0.3)
-        
-        plt.tight_layout()
+        fig = self._create_summary_plots(campaign_results)
         fig.savefig(png_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
         
